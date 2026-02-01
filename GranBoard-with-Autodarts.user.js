@@ -3,7 +3,7 @@
 // @updateURL    https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
 // @downloadURL  https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
 // @namespace    local.granboard.autodarts.combo
-// @version      3.0.4
+// @version      3.0.5
 // @description  GranBoard BLE -> Autodarts. Keyboard authoritative when numbers exist; board fallback only when keypad has no numbers. Auto-switches AD to board/scheibe when needed. UI: Status colored/bold, shows Mode only (Boardview/Keyboardview + (Auto)). BTN@ => NEXT. Floating GB button bottom-right (no sidebar injection). Optional LED flash on NEXT (0D.. then 0F..).
 // @match        *://play.autodarts.io/*
 // @match        *://*.autodarts.io/*
