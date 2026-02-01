@@ -78,7 +78,7 @@ To ensure proper operation, **userscripts must be allowed**:
 ### 2️⃣ Install the userscript
 👉 Open this link (Tampermonkey will detect it automatically):
 
-https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
+https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.js
 
 ### 3️⃣ Open Autodarts
 - https://play.autodarts.io
