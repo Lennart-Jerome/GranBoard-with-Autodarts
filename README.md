@@ -25,7 +25,7 @@ Das Script entscheidet dabei **intelligent**, ob Eingaben über das **Autodarts-
 - ✅ Training
 - ✅ Bobs27  
   → Hier gibt es **kein Zahlen-Keyboard**, nur *Hit / Miss / Undo / Next*  
-  → Das Script wechselt automatisch in die **Boardview** und klickt die Scheibe
+  → Das Script wechselt automatisch in die **Boardview** und klickt die Scheibe ❗ Manuelles umschalten in der autodarts UI aktuell noch notwendig
 
 ---
 
@@ -35,6 +35,7 @@ Das Script entscheidet dabei **intelligent**, ob Eingaben über das **Autodarts-
   → `Next` muss aktuell **manuell über das Touchfeld am GranBoard** gedrückt werden  
   → Automatisches Next ist **geplant**, aber noch nicht implementiert
 - ❗ **LED-Steuerung ist noch in Entwicklung**  
+  → Möglicherweise muss das Board disconnected und reconnected werden um den initalen Regenbogen Effekt zu stoppen
   → Aktuell gibt es **nur ein visuelles Feedback**, wenn `Next` gedrückt wurde  
   → Das Touchfeld leuchtet kurz im Regenbogen-Modus  
   → Weitere LED-Integrationen sind geplant (DevTools sind vorbereitet)
@@ -59,8 +60,8 @@ Damit das Script funktioniert, müssen **Userscripts erlaubt sein**:
 
 ### Chrome / Edge
 1. Tampermonkey installieren
-2. In Tampermonkey:
-   - „Userscripts ausführen“ aktivieren
+2. In Tampermonkey optionen:
+   - „Userscripts ausführen“ aktivieren ❗ 
 3. Bluetooth-Zugriff im Browser erlauben
 4. Pop-up zum Bluetooth-Gerät **nicht blockieren**
 
@@ -113,67 +114,6 @@ Wenn das Keyboard **keine Zahlen enthält**, z. B.:
 - klickt die Scheibe direkt an der berechneten Position
 
 Der aktuelle Modus wird im Overlay angezeigt:
-
-
----
-
-## 🔘 Overlay & Bedienung
-
-- **Connect / Disconnect**: Bluetooth-Verbindung
-- **Mode-Auswahl**:
-  - Auto (empfohlen)
-  - Keyboard
-  - Board
-- **Debug-Modus**:
-  - Zeigt Logs & RAW-Daten
-- **Status-Anzeige**:
-  - Grün = verbunden
-  - Rot = getrennt
-
----
-
-## 🔐 Datenschutz & Sicherheit
-
-- ✅ Keine personenbezogenen Daten
-- ✅ Keine Accounts, Tokens oder IDs
-- ✅ Keine festen MAC-Adressen
-- ✅ BLE-UUIDs sind bei allen GranBoards identisch
-- ✅ Alle Daten bleiben lokal im Browser
-
----
-
-## 🧪 Kompatibilität
-
-- Getestet mit GranBoard (BLE)
-- Sollte mit allen GranBoard-Modellen funktionieren,
-  die von der offiziellen GranBoard-App unterstützt werden
-
----
-
-## 🚧 Bekannte Einschränkungen
-
-- Autodarts UI-Änderungen können Anpassungen nötig machen
-- WebBluetooth ist browserabhängig
-- Firefox wird nicht unterstützt
-
----
-
-## 🛠️ Entwicklung & Roadmap
-
-Geplante Features:
-- Automatisches `Next`
-- Erweiterte LED-Steuerung
-- Feineres visuelles Feedback
-- Optionale Browser-Erweiterung
-
-Beiträge, Feedback und Tests sind willkommen 👍
-
----
-
-## 📜 Lizenz
-
-Private Nutzung & Hobby-Projekte erlaubt.  
-Keine offizielle Verbindung zu Autodarts oder GranBoard.
 
 ---
 

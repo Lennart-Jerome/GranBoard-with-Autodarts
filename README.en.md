@@ -25,7 +25,7 @@ The script intelligently decides whether input should be handled via the **Autod
 - ✅ Training
 - ✅ Bobs27  
   → No numeric keypad available, only *Hit / Miss / Undo / Next*  
-  → The script automatically switches to **Boardview** and clicks the board
+  → The script automatically switches to **Boardview** and clicks the board ❗ Manuel switch i Autodarts currently needed
 
 ---
 
@@ -35,6 +35,7 @@ The script intelligently decides whether input should be handled via the **Autod
   → `Next` must currently be triggered **manually via the GranBoard touch field**  
   → Automatic Next is **planned**, but not implemented yet
 - ❗ **LED control is still in development**  
+  → Stop initial Rainbow effekt by disconnect and reconnect
   → Currently, there is **only visual feedback** when `Next` is pressed  
   → The touch field briefly lights up in rainbow mode  
   → Further LED integrations are planned (DevTools already prepared)
@@ -60,7 +61,7 @@ To ensure proper operation, **userscripts must be allowed**:
 ### Chrome / Edge
 1. Install Tampermonkey
 2. In Tampermonkey:
-   - Enable “Allow userscripts”
+   - Enable “Allow userscripts”❗ 
 3. Allow Bluetooth access in the browser
 4. Do **not** block the Bluetooth device selection popup
 
