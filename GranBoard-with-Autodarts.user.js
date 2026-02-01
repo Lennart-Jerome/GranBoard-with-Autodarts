@@ -1,46 +1,79 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.5
-// @description  Connects GranBoard via Bluetooth (BLE) directly to Autodarts
+// @version      3.0.8
+// @description  GranBoard BLE → Autodarts with AutoView + Board Settings + per-action LED presets
 // @author       Lennart-Jerome
-// @homepage     https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
+// @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
 // @supportURL   https://github.com/Lennart-Jerome/GranBoard-with-Autodarts/issues
 // @updateURL    https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
 // @downloadURL  https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
-// @match        *://play.autodarts.io/*
-// @match        *://*.autodarts.io/*
+// @match        https://play.autodarts.io/*
+// @match        https://*.autodarts.io/*
+// @run-at       document-end
 // @grant        none
 // ==/UserScript==
 
-
 (function () {
   "use strict";
-  if (window.__GB_AD_COMBO_V304_INIT__) return;
-  window.__GB_AD_COMBO_V304_INIT__ = true;
+  if (window.__GB_AD_STEP3_V307_INIT__) return;
+  window.__GB_AD_STEP3_V307_INIT__ = true;
 
   /********************************************************************
-   * Storage / Settings
+   * Storage
    ********************************************************************/
   const STORAGE = {
-    DEBUG: "gb_debug_enabled",
     OVERLAY: "gb_overlay_visible",
     LAST_DEVICE_NAME: "gb_last_device_name",
-    INPUT_MODE: "gb_input_mode_v300",      // "auto" | "keyboard" | "board"
-    LED_NEXT: "gb_led_next_flash_enabled"  // "1" | "0"
+
+    INPUT_MODE: "gb_input_mode_v307",         // auto | keyboard | board
+    LOG_LEVEL: "gb_log_level_v307",           // off | basic | adv
+
+    // Board settings
+    BS_REPLY_INTERVAL: "gb_bs_reply_interval", // 0..255 (byte0) ..45
+    BS_OUT_SENS: "gb_bs_out_sens",             // 0..15  (byte0) ..67
+    BS_TARGET_SET: "gb_bs_target_set",         // set1..set4  ..3A3B
+
+    // LED per reaction settings
+    LED_REACTION_PREFIX: "gb_led_rxn_",        // + reactionId -> JSON
   };
 
-  const SETTINGS = {
-    debug: localStorage.getItem(STORAGE.DEBUG) !== "0",
+  const DEFAULTS = {
     overlay: localStorage.getItem(STORAGE.OVERLAY) !== "0",
     inputMode: (localStorage.getItem(STORAGE.INPUT_MODE) || "auto"),
-    ledNext: localStorage.getItem(STORAGE.LED_NEXT) === "1"
+    logLevel: (localStorage.getItem(STORAGE.LOG_LEVEL) || "basic"),
+    boardReplyInterval: +(localStorage.getItem(STORAGE.BS_REPLY_INTERVAL) || "12"),
+    boardOutSens: +(localStorage.getItem(STORAGE.BS_OUT_SENS) || "7"),
+    boardTargetSet: (localStorage.getItem(STORAGE.BS_TARGET_SET) || "set2"),
   };
 
-  function saveBool(key, val) { try { localStorage.setItem(key, val ? "1" : "0"); } catch {} }
   function saveStr(key, val) { try { localStorage.setItem(key, String(val ?? "")); } catch {} }
+  function saveNum(key, val) { try { localStorage.setItem(key, String(+val)); } catch {} }
+  function saveBool(key, val) { try { localStorage.setItem(key, val ? "1" : "0"); } catch {} }
+
   function saveLastDeviceName(name) { try { localStorage.setItem(STORAGE.LAST_DEVICE_NAME, name || ""); } catch {} }
   function getLastDeviceName() { try { return (localStorage.getItem(STORAGE.LAST_DEVICE_NAME) || "").trim(); } catch { return ""; } }
+
+  /********************************************************************
+   * i18n (Next/Undo labels should follow AD language)
+   ********************************************************************/
+  function getUILang() {
+    const lang = (document.documentElement.getAttribute("lang") || navigator.language || "en").toLowerCase();
+    if (lang.startsWith("de")) return "de";
+    if (lang.startsWith("nl")) return "nl";
+    return "en";
+  }
+
+  const I18N = {
+    en: { next: "Next", undo: "Undo", settings: "Settings", hide: "Hide", connect: "Connect", disconnect: "Disconnect", auto: "Auto", keyboard:"Keyboard", board:"Board" },
+    de: { next: "Nächster", undo: "Rückgängig", settings: "Settings", hide: "Hide", connect: "Connect", disconnect: "Disconnect", auto: "Auto", keyboard:"Keyboard", board:"Board" },
+    nl: { next: "Volgende", undo: "Ongedaan maken", settings: "Settings", hide: "Hide", connect: "Connect", disconnect: "Disconnect", auto: "Auto", keyboard:"Keyboard", board:"Board" },
+  };
+
+  function t(key) {
+    const lang = getUILang();
+    return (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+  }
 
   /********************************************************************
    * Config
@@ -51,58 +84,24 @@
       "0000180f-0000-1000-8000-00805f9b34fb",
       "0000180a-0000-1000-8000-00805f9b34fb"
     ],
-    labels: {
-      double: "Double",
-      triple: "Triple",
-      miss: "Miss",
-      bull25: "25",
-      bull: "Bull",
-      next: "Next"
-    },
-    waitAfterModifierMs: 200,
-    minMsBetweenThrows: 250,
-    hotkeys: {
-      overlay: { ctrl: true, shift: true, code: "KeyO" },
-      debug: { ctrl: true, shift: true, code: "KeyD" }
-    },
+    namePrefix: "GRAN",
     CONNECT_PREFIX: "GB8;102",
-    namePrefix: "GRAN"
-  };
 
-  /********************************************************************
-   * RAW -> Target mapping
-   ********************************************************************/
-  const RAW_TO_TARGET = new Map([
-    ["2.5@", { ring: "SO", n: 1 }], ["2.3@", { ring: "SI", n: 1 }], ["2.6@", { ring: "D", n: 1 }], ["2.4@", { ring: "T", n: 1 }],
-    ["9.2@", { ring: "SO", n: 2 }], ["9.1@", { ring: "SI", n: 2 }], ["8.2@", { ring: "D", n: 2 }], ["9.0@", { ring: "T", n: 2 }],
-    ["7.2@", { ring: "SO", n: 3 }], ["7.1@", { ring: "SI", n: 3 }], ["8.4@", { ring: "D", n: 3 }], ["7.0@", { ring: "T", n: 3 }],
-    ["0.5@", { ring: "SO", n: 4 }], ["0.1@", { ring: "SI", n: 4 }], ["0.6@", { ring: "D", n: 4 }], ["0.3@", { ring: "T", n: 4 }],
-    ["5.4@", { ring: "SO", n: 5 }], ["5.1@", { ring: "SI", n: 5 }], ["4.6@", { ring: "D", n: 5 }], ["5.2@", { ring: "T", n: 5 }],
-    ["1.3@", { ring: "SO", n: 6 }], ["1.0@", { ring: "SI", n: 6 }], ["4.4@", { ring: "D", n: 6 }], ["1.1@", { ring: "T", n: 6 }],
-    ["11.4@", { ring: "SO", n: 7 }], ["11.1@", { ring: "SI", n: 7 }], ["8.6@", { ring: "D", n: 7 }], ["11.2@", { ring: "T", n: 7 }],
-    ["6.5@", { ring: "SO", n: 8 }], ["6.2@", { ring: "SI", n: 8 }], ["6.6@", { ring: "D", n: 8 }], ["6.4@", { ring: "T", n: 8 }],
-    ["9.5@", { ring: "SO", n: 9 }], ["9.3@", { ring: "SI", n: 9 }], ["9.6@", { ring: "D", n: 9 }], ["9.4@", { ring: "T", n: 9 }],
-    ["2.2@", { ring: "SO", n: 10 }], ["2.0@", { ring: "SI", n: 10 }], ["4.3@", { ring: "D", n: 10 }], ["2.1@", { ring: "T", n: 10 }],
-    ["7.5@", { ring: "SO", n: 11 }], ["7.3@", { ring: "SI", n: 11 }], ["7.6@", { ring: "D", n: 11 }], ["7.4@", { ring: "T", n: 11 }],
-    ["5.5@", { ring: "SO", n: 12 }], ["5.0@", { ring: "SI", n: 12 }], ["5.6@", { ring: "D", n: 12 }], ["5.3@", { ring: "T", n: 12 }],
-    ["0.4@", { ring: "SO", n: 13 }], ["0.0@", { ring: "SI", n: 13 }], ["4.5@", { ring: "D", n: 13 }], ["0.2@", { ring: "T", n: 13 }],
-    ["10.5@", { ring: "SO", n: 14 }], ["10.3@", { ring: "SI", n: 14 }], ["10.6@", { ring: "D", n: 14 }], ["10.4@", { ring: "T", n: 14 }],
-    ["3.2@", { ring: "SO", n: 15 }], ["3.0@", { ring: "SI", n: 15 }], ["4.2@", { ring: "D", n: 15 }], ["3.1@", { ring: "T", n: 15 }],
-    ["11.5@", { ring: "SO", n: 16 }], ["11.0@", { ring: "SI", n: 16 }], ["11.6@", { ring: "D", n: 16 }], ["11.3@", { ring: "T", n: 16 }],
-    ["10.2@", { ring: "SO", n: 17 }], ["10.1@", { ring: "SI", n: 17 }], ["8.3@", { ring: "D", n: 17 }], ["10.0@", { ring: "T", n: 17 }],
-    ["1.5@", { ring: "SO", n: 18 }], ["1.2@", { ring: "SI", n: 18 }], ["1.6@", { ring: "D", n: 18 }], ["1.4@", { ring: "T", n: 18 }],
-    ["6.3@", { ring: "SO", n: 19 }], ["6.1@", { ring: "SI", n: 19 }], ["8.5@", { ring: "D", n: 19 }], ["6.0@", { ring: "T", n: 19 }],
-    ["3.5@", { ring: "SO", n: 20 }], ["3.3@", { ring: "SI", n: 20 }], ["3.6@", { ring: "D", n: 20 }], ["3.4@", { ring: "T", n: 20 }],
-    ["OUT@", { ring: "OUT", n: 0 }],
-    ["8.0@", { ring: "SBULL", n: 25 }],
-    ["4.0@", { ring: "DBULL", n: 50 }]
-  ]);
+    uiSwitchWaitMs: 180,
+    uiSwitchRetryMs: 900,
+    minMsBetweenThrows: 250,
+  };
 
   /********************************************************************
    * Helpers
    ********************************************************************/
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toUpperCase();
+
+  function ts() {
+    // HH:MM:SS
+    return new Date().toLocaleTimeString();
+  }
 
   function isClickableButton(btn) {
     if (!btn) return false;
@@ -114,30 +113,79 @@
     return true;
   }
 
-  function findBtnExact(label) {
-    const wanted = norm(label);
-    return Array.from(document.querySelectorAll("button")).find(b => norm(b.textContent) === wanted) || null;
-  }
-  function findBtnContains(labelPart) {
-    const wanted = norm(labelPart);
-    return Array.from(document.querySelectorAll("button")).find(b => norm(b.textContent).includes(wanted)) || null;
-  }
-  function findNextButton() {
-    return findBtnExact(CONFIG.labels.next) || findBtnContains("NEXT");
+  function isElementVisible(el) {
+    if (!el) return false;
+    const st = getComputedStyle(el);
+    if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none") return false;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+    return true;
   }
 
-  function normalizeActionFromButtonText(t) {
-    const u = norm(t);
+  function u8ToHex(u8) {
+    return Array.from(u8).map(b => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+  }
+
+  function bytesToAsciiVisible(u8) {
+    return [...u8].map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : ".").join("");
+  }
+
+  function hexToU8(hex) {
+    const clean = String(hex || "").replace(/[^0-9a-f]/gi, "");
+    const out = new Uint8Array(Math.floor(clean.length / 2));
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+  function parseHexColor(hex) {
+    let h = String(hex || "").trim();
+    if (!h) return { r:255, g:0, b:0 };
+    if (h.startsWith("#")) h = h.slice(1);
+    if (h.length === 3) h = h.split("").map(x=>x+x).join("");
+    if (h.length !== 6) return { r:255, g:0, b:0 };
+    const r = parseInt(h.slice(0,2), 16);
+    const g = parseInt(h.slice(2,4), 16);
+    const b = parseInt(h.slice(4,6), 16);
+    return { r, g, b };
+  }
+
+  /********************************************************************
+   * Autodarts keypad labels (Next/Undo localized)
+   ********************************************************************/
+  function findBtnByExactTextAny(labels) {
+    const wanted = labels.map(norm);
+    const buttons = Array.from(document.querySelectorAll("button"));
+    return buttons.find(b => wanted.includes(norm(b.textContent))) || null;
+  }
+
+  function findNextButton() {
+    // Next is localized; fallback: contains NEXT in any language list
+    const nextLabels = [t("next"), "NEXT", "VOLGENDE", "NÄCHSTER"];
+    return findBtnByExactTextAny(nextLabels);
+  }
+
+  function findUndoButton() {
+    const undoLabels = [t("undo"), "UNDO", "RÜCKGÄNGIG", "ONGEDAAN MAKEN"];
+    return findBtnByExactTextAny(undoLabels);
+  }
+
+  function normalizeActionFromButtonText(tText) {
+    const u = norm(tText);
     if (!u) return null;
 
+    // Keep these stable: Autodarts uses English for these even in other locales (as you said)
     if (u === "MISS") return "MISS";
-    if (u === "UNDO") return null;
-    if (u === "NEXT") return "NEXT";
     if (u === "DOUBLE") return "DOUBLE_MOD";
     if (u === "TRIPLE") return "TRIPLE_MOD";
     if (u === "BULL") return "BULL";
     if (u === "25") return "25";
-    if (u === "HIT") return "HIT";
+
+    // localized Next / Undo
+    if (u === norm(t("next")) || u === "NEXT" || u === "VOLGENDE" || u === "NÄCHSTER") return "NEXT";
+    if (u === norm(t("undo")) || u === "UNDO" || u === "RÜCKGÄNGIG" || u === "ONGEDAAN MAKEN") return "UNDO";
 
     const m = u.match(/^([SDT])\s*(\d{1,2})$/);
     if (m) {
@@ -166,347 +214,134 @@
     return false;
   }
 
-  function shouldUseBoardFallbackInAuto(allowed) {
-    return !allowedHasAnyNumbers(allowed);
-  }
-
-  function formatModeLabel(resolvedMode) {
-    const view = resolvedMode === "board" ? "Boardview" : "Keyboardview";
-    const suffix = SETTINGS.inputMode === "auto" ? " (Auto)" : "";
-    return `${view}${suffix}`;
-  }
-
   /********************************************************************
-   * UI
+   * AutoView: Keyboard/Segments icon & Boardview icon detection
    ********************************************************************/
-  function createUI() {
-    try { document.getElementById("__gb_ad_overlay__")?.remove(); } catch {}
-    try { document.getElementById("__gb_ad_tab__")?.remove(); } catch {}
-
-    const root = document.createElement("div");
-    root.id = "__gb_ad_overlay__";
-    root.style.cssText =
-      "position:fixed;right:12px;bottom:12px;z-index:2147483647;" +
-      "background:rgba(8,10,14,.30);backdrop-filter: blur(7px);-webkit-backdrop-filter: blur(7px);" +
-      "color:#fff;padding:10px 12px;border-radius:12px;" +
-      "font:12px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;" +
-      "width:420px;max-width:calc(100vw - 24px);" +
-      "box-shadow:0 8px 30px rgba(0,0,0,.25);" +
-      "border:1px solid rgba(255,255,255,.14);";
-
-    // Floating tab bottom-right (like before)
-    const tab = document.createElement("button");
-    tab.id = "__gb_ad_tab__";
-    tab.textContent = "GB";
-    tab.title = "GranBoard overlay (Ctrl+Shift+O)";
-    tab.style.cssText =
-      "position:fixed;right:12px;bottom:12px;z-index:2147483647;" +
-      "padding:10px 12px;border-radius:999px;" +
-      "border:2px solid rgba(255,80,80,.95);" +
-      "background:rgba(8,10,14,.35);backdrop-filter: blur(7px);-webkit-backdrop-filter: blur(7px);" +
-      "color:#fff;cursor:pointer;font:12px system-ui;display:none;" +
-      "box-shadow:0 0 14px rgba(255,80,80,.35);";
-
-    root.innerHTML =
-      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">' +
-        '<div style="font-weight:800;font-size:14px;">GranBoard → Autodarts</div>' +
-        '<button id="gb-hide" title="Hide overlay" style="padding:4px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.10);color:#fff;cursor:pointer;">Hide</button>' +
-      "</div>" +
-
-      '<div style="margin-top:10px;opacity:.92;font-size:11px;">' +
-        '<div>Status: <span id="gb-status" style="font-weight:900;">disconnected</span></div>' +
-        '<div>Device: <span id="gb-device">—</span></div>' +
-        '<div>Mode: <span id="gb-mode">—</span></div>' +
-        '<div>RAW: <span id="gb-raw">—</span></div>' +
-        '<div>Action: <span id="gb-action">—</span></div>' +
-      "</div>" +
-
-      '<div style="margin-top:12px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap;">' +
-        '<button id="gb-connect-toggle" style="' +
-          'padding:8px 14px;border-radius:14px;border:2px solid rgba(60,180,110,.50);' +
-          'cursor:pointer;background:rgba(60,180,110,.22);color:#fff;font-weight:800;' +
-          'font-size:13px;line-height:1.2;display:inline-block;' +
-        '">Connect</button>' +
-
-        '<select id="gb-input-select" title="Input mode" style="' +
-          'padding:8px 10px;border-radius:14px;border:1px solid rgba(255,255,255,.18);' +
-          'background:rgba(0,0,0,.25);color:#fff;cursor:pointer;font-weight:700;' +
-        '">' +
-          '<option value="auto">Auto</option>' +
-          '<option value="keyboard">Keyboard</option>' +
-          '<option value="board">Board</option>' +
-        '</select>' +
-      "</div>" +
-
-      '<div style="margin-top:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">' +
-        '<label style="display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none;">' +
-          '<input type="checkbox" id="gb-debug-toggle" /> <span>Debug</span>' +
-        "</label>" +
-        '<label style="display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none;">' +
-          '<input type="checkbox" id="gb-led-toggle" /> <span>LED on Next</span>' +
-        "</label>" +
-      "</div>" +
-
-      '<div id="gb-log-wrap" style="margin-top:12px;max-height:200px;overflow:auto;font-size:11px;opacity:.92;display:none;">' +
-        '<div style="font-weight:700;margin-bottom:6px;">Log</div>' +
-        '<div id="gb-log"></div>' +
-      "</div>";
-
-    document.documentElement.appendChild(root);
-    document.documentElement.appendChild(tab);
-
-    const $ = (sel) => root.querySelector(sel);
-    const logEl = $("#gb-log");
-
-    return {
-      root,
-      tab,
-      hideBtn: $("#gb-hide"),
-      debugToggle: $("#gb-debug-toggle"),
-      ledToggle: $("#gb-led-toggle"),
-      logWrap: $("#gb-log-wrap"),
-      connectToggleBtn: $("#gb-connect-toggle"),
-      inputSelect: $("#gb-input-select"),
-      status: $("#gb-status"),
-      device: $("#gb-device"),
-      mode: $("#gb-mode"),
-      raw: $("#gb-raw"),
-      action: $("#gb-action"),
-      log: (msg) => {
-        if (!SETTINGS.debug) return;
-        const line = document.createElement("div");
-        line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
-        logEl.prepend(line);
-      }
-    };
+  function looksLikeSegmentsButton(btn) {
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (!isElementVisible(btn)) return false;
+    const aria = (btn.getAttribute("aria-label") || "").toLowerCase();
+    const svg = btn.querySelector("svg[viewBox='0 0 24 24']");
+    if (!svg) return false;
+    const paths = Array.from(svg.querySelectorAll("path")).map(p => p.getAttribute("d") || "");
+    const hasPath = paths.some(d => d.includes("M20 5H4c-1.1"));
+    return aria.includes("segments") || hasPath;
   }
 
-  let ui = createUI();
+  function looksLikeBoardViewButton(btn) {
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (!isElementVisible(btn)) return false;
+    const svg = btn.querySelector("svg[viewBox='0 0 24 24']");
+    if (!svg) return false;
+    const paths = Array.from(svg.querySelectorAll("path")).map(p => p.getAttribute("d") || "");
+    return paths.some(d => d.includes("M12 2C6.49 2"));
+  }
 
-  let connected = false;
-  function paintStatus() {
-    if (!ui?.status) return;
-    ui.status.style.fontWeight = "900";
-    if (connected) {
-      ui.status.style.color = "rgba(60,220,120,.98)";
-      ui.status.textContent = "connected";
-    } else {
-      ui.status.style.color = "rgba(255,80,80,.98)";
-      ui.status.textContent = "disconnected";
+  function isActiveModeButton(btn) {
+    return !!btn && (btn.hasAttribute("data-active") || btn.getAttribute("data-active") === "");
+  }
+
+  function findSegmentsButton() {
+    return Array.from(document.querySelectorAll("button")).find(looksLikeSegmentsButton) || null;
+  }
+
+  function findBoardViewButton() {
+    return Array.from(document.querySelectorAll("button")).find(looksLikeBoardViewButton) || null;
+  }
+
+  let __lastUiSwitchAttemptAt = 0;
+
+  async function ensureKeyboardView(logAdv) {
+    const now = Date.now();
+    if (now - __lastUiSwitchAttemptAt < CONFIG.uiSwitchRetryMs) return false;
+    __lastUiSwitchAttemptAt = now;
+
+    const seg = findSegmentsButton();
+    if (!seg) return false;
+    if (isActiveModeButton(seg)) return true;
+
+    if (isClickableButton(seg)) {
+      logAdv?.("AutoView: switching to Keyboard");
+      seg.click();
+      await sleep(CONFIG.uiSwitchWaitMs);
+      return true;
     }
+    return false;
   }
 
-  function setOverlayVisible(v) {
-    SETTINGS.overlay = !!v;
-    saveBool(STORAGE.OVERLAY, SETTINGS.overlay);
-    ui.root.style.display = SETTINGS.overlay ? "block" : "none";
-    ui.tab.style.display = SETTINGS.overlay ? "none" : "block";
-  }
+  async function ensureBoardView(logAdv) {
+    const now = Date.now();
+    if (now - __lastUiSwitchAttemptAt < CONFIG.uiSwitchRetryMs) return false;
+    __lastUiSwitchAttemptAt = now;
 
-  function applyDebugUI() {
-    ui.debugToggle.checked = SETTINGS.debug;
-    ui.logWrap.style.display = SETTINGS.debug ? "block" : "none";
-  }
+    const bv = findBoardViewButton();
+    if (!bv) return false;
+    if (isActiveModeButton(bv)) return true;
 
-  function applyLedUI() {
-    ui.ledToggle.checked = SETTINGS.ledNext;
-  }
-
-  function applyInputModeUI() {
-    ui.inputSelect.value = SETTINGS.inputMode;
-  }
-
-  setOverlayVisible(SETTINGS.overlay);
-  applyDebugUI();
-  applyLedUI();
-  applyInputModeUI();
-  paintStatus();
-
-  ui.hideBtn.addEventListener("click", () => setOverlayVisible(false));
-  ui.tab.addEventListener("click", () => setOverlayVisible(true));
-
-  ui.debugToggle.addEventListener("change", () => {
-    SETTINGS.debug = !!ui.debugToggle.checked;
-    saveBool(STORAGE.DEBUG, SETTINGS.debug);
-    applyDebugUI();
-    ui.log("Debug " + (SETTINGS.debug ? "enabled" : "disabled"));
-  });
-
-  ui.ledToggle.addEventListener("change", () => {
-    SETTINGS.ledNext = !!ui.ledToggle.checked;
-    saveBool(STORAGE.LED_NEXT, SETTINGS.ledNext);
-    ui.log("LED on Next " + (SETTINGS.ledNext ? "enabled" : "disabled"));
-  });
-
-  ui.inputSelect.addEventListener("change", () => {
-    SETTINGS.inputMode = ui.inputSelect.value || "auto";
-    saveStr(STORAGE.INPUT_MODE, SETTINGS.inputMode);
-    applyInputModeUI();
-    ui.log("Input mode set to: " + SETTINGS.inputMode);
-  });
-
-  document.addEventListener("keydown", (e) => {
-    const match = (hk) => (!!hk.ctrl === e.ctrlKey) && (!!hk.shift === e.shiftKey) && (hk.code === e.code);
-    if (match(CONFIG.hotkeys.overlay)) {
-      e.preventDefault();
-      setOverlayVisible(!SETTINGS.overlay);
+    if (isClickableButton(bv)) {
+      logAdv?.("AutoView: switching to Board");
+      bv.click();
+      await sleep(CONFIG.uiSwitchWaitMs);
+      return true;
     }
-    if (match(CONFIG.hotkeys.debug)) {
-      e.preventDefault();
-      SETTINGS.debug = !SETTINGS.debug;
-      saveBool(STORAGE.DEBUG, SETTINGS.debug);
-      applyDebugUI();
-      ui.log("Debug " + (SETTINGS.debug ? "enabled" : "disabled"));
+    return false;
+  }
+
+  // AutoView: on "New game / Start" actions, prefer Keyboard view as the default.
+  // We do this with a small retry loop because the Segments button may appear a moment later.
+  function scheduleKeyboardOnNewGame(reason) {
+    if (STATE.inputMode !== "auto") return;
+    let tries = 0;
+    const maxTries = 8;
+    const t = setInterval(async () => {
+      tries++;
+      const ok = await ensureKeyboardView(ui?.logAdv).catch(()=>false);
+      if (ok || tries >= maxTries) clearInterval(t);
+    }, 350);
+    ui?.logAdv?.(`AutoView: new game -> try Keyboard (${reason || "signal"})`);
+  }
+
+  // Capture clicks on likely "start/new game" buttons (German + English).
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target?.closest?.("button");
+    if (!btn) return;
+    const txt = (btn.textContent || "").trim().toLowerCase();
+    const aria = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+    const hay = (txt + " " + aria).replace(/\s+/g, " ");
+    if (/(new game|start game|start match|new match|neues spiel|spiel starten|starten|neue partie)/i.test(hay)) {
+      scheduleKeyboardOnNewGame(hay);
     }
   }, true);
 
-  /********************************************************************
-   * BLE: notify + LED write characteristic
-   ********************************************************************/
-  let device = null;
-  let server = null;
-  let notifyChar = null;
-  let ledChar = null;
-  let streamBuffer = new Uint8Array(0);
-
-  function setTabBorder() {
-    const color = connected ? "rgba(60,220,120,.95)" : "rgba(255,80,80,.95)";
-    ui.tab.style.borderColor = color;
-    ui.tab.style.boxShadow = connected
-      ? "0 0 14px rgba(60,220,120,.35)"
-      : "0 0 14px rgba(255,80,80,.35)";
-  }
-
-  function setConnectedState(isConnected) {
-    connected = !!isConnected;
-
-    const idleLabel = getLastDeviceName() ? "Reconnect" : "Connect";
-    ui.connectToggleBtn.textContent = connected ? "Disconnect" : idleLabel;
-
-    ui.connectToggleBtn.style.background = connected ? "rgba(255,90,90,.20)" : "rgba(60,180,110,.22)";
-    ui.connectToggleBtn.style.borderColor = connected ? "rgba(255,90,90,.50)" : "rgba(60,180,110,.50)";
-
-    paintStatus();
-    setTabBorder();
-  }
-
-  function appendToBuffer(u8) {
-    const merged = new Uint8Array(streamBuffer.length + u8.length);
-    merged.set(streamBuffer, 0);
-    merged.set(u8, streamBuffer.length);
-    streamBuffer = merged;
-  }
-
-  function extractFrames() {
-    const frames = [];
-    while (true) {
-      const idx = streamBuffer.indexOf(0x40); // '@'
-      if (idx === -1) break;
-      frames.push(streamBuffer.slice(0, idx + 1));
-      streamBuffer = streamBuffer.slice(idx + 1);
-    }
-    return frames;
-  }
-
-  function bytesToAsciiVisible(u8) {
-    return [...u8].map(b => (b >= 32 && b <= 126) ? String.fromCharCode(b) : ".").join("");
-  }
-
-  // --- LED helpers ---
-  function hexToU8(hex) {
-    const clean = String(hex || "").replace(/[^0-9a-f]/gi, "");
-    const out = new Uint8Array(clean.length / 2);
-    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
-    return out;
-  }
-
-  async function ledWrite(bytes) {
-    if (!ledChar) return false;
-    try {
-      if (ledChar.properties.writeWithoutResponse) {
-        await ledChar.writeValueWithoutResponse(bytes);
-      } else {
-        await ledChar.writeValue(bytes);
-      }
-      return true;
-    } catch (e) {
-      ui?.log?.("LED write failed: " + (e?.message || e));
-      return false;
-    }
-  }
-
-  let __ledNextFlashBusy = false;
-  async function flashLedOnNext() {
-    if (!SETTINGS.ledNext) return;
-    if (__ledNextFlashBusy) return;
-    if (!ledChar) return;
-
-    __ledNextFlashBusy = true;
-    try {
-      // 0D 00 00 00 for 1.5s then 01 00 00 00
-      await ledWrite(hexToU8("0D 00 00 00"));
-      await sleep(1500);
-      await ledWrite(hexToU8("01 00 00 00"));
-    } finally {
-      __ledNextFlashBusy = false;
-    }
-  }
 
   /********************************************************************
-   * Keyboard / Buttons injection
+   * RAW -> target mapping (from your existing mapping)
    ********************************************************************/
-  async function clickMiss() { findBtnExact(CONFIG.labels.miss)?.click(); }
-  async function click25() { findBtnExact(CONFIG.labels.bull25)?.click(); }
-
-  async function clickBull50OrFallback() {
-    const bullBtn = findBtnExact(CONFIG.labels.bull);
-    if (isClickableButton(bullBtn)) { bullBtn.click(); return true; }
-    const mod = findBtnExact(CONFIG.labels.double);
-    if (isClickableButton(mod)) {
-      mod.click();
-      await sleep(CONFIG.waitAfterModifierMs);
-      await click25();
-      return true;
-    }
-    return false;
-  }
-
-  async function clickWithModifier(kind, n) {
-    const modLabel = (kind === "D") ? CONFIG.labels.double : CONFIG.labels.triple;
-    const modBtn = findBtnExact(modLabel);
-    if (!isClickableButton(modBtn)) return false;
-
-    modBtn.click();
-    await sleep(CONFIG.waitAfterModifierMs);
-
-    const btn = findBtnExact(kind + n);
-    if (isClickableButton(btn)) { btn.click(); return true; }
-    return false;
-  }
-
-  async function clickAction(action) {
-    if (action === "NEXT") {
-      findNextButton()?.click();
-      // fire-and-forget LED
-      flashLedOnNext();
-      return true;
-    }
-    if (action === "MISS") { await clickMiss(); return true; }
-    if (action === "25") { await click25(); return true; }
-    if (action === "BULL") { return await clickBull50OrFallback(); }
-    if (action === "HIT") {
-      const b = findBtnExact("Hit") || findBtnExact("HIT");
-      if (isClickableButton(b)) { b.click(); return true; }
-    }
-
-    const direct = findBtnExact(action);
-    if (isClickableButton(direct)) { direct.click(); return true; }
-
-    const m = action.match(/^([DT])(\d{1,2})$/);
-    if (m) return await clickWithModifier(m[1], m[2]);
-
-    return false;
-  }
+  const RAW_TO_TARGET = new Map([
+    ["2.5@", { ring: "SO", n: 1 }], ["2.3@", { ring: "SI", n: 1 }], ["2.6@", { ring: "D", n: 1 }], ["2.4@", { ring: "T", n: 1 }],
+    ["9.2@", { ring: "SO", n: 2 }], ["9.1@", { ring: "SI", n: 2 }], ["8.2@", { ring: "D", n: 2 }], ["9.0@", { ring: "T", n: 2 }],
+    ["7.2@", { ring: "SO", n: 3 }], ["7.1@", { ring: "SI", n: 3 }], ["8.4@", { ring: "D", n: 3 }], ["7.0@", { ring: "T", n: 3 }],
+    ["0.5@", { ring: "SO", n: 4 }], ["0.1@", { ring: "SI", n: 4 }], ["0.6@", { ring: "D", n: 4 }], ["0.3@", { ring: "T", n: 4 }],
+    ["5.4@", { ring: "SO", n: 5 }], ["5.1@", { ring: "SI", n: 5 }], ["4.6@", { ring: "D", n: 5 }], ["5.2@", { ring: "T", n: 5 }],
+    ["1.3@", { ring: "SO", n: 6 }], ["1.0@", { ring: "SI", n: 6 }], ["4.4@", { ring: "D", n: 6 }], ["1.1@", { ring: "T", n: 6 }],
+    ["11.4@", { ring: "SO", n: 7 }], ["11.1@", { ring: "SI", n: 7 }], ["8.6@", { ring: "D", n: 7 }], ["11.2@", { ring: "T", n: 7 }],
+    ["6.5@", { ring: "SO", n: 8 }], ["6.2@", { ring: "SI", n: 8 }], ["6.6@", { ring: "D", n: 8 }], ["6.4@", { ring: "T", n: 8 }],
+    ["9.5@", { ring: "SO", n: 9 }], ["9.3@", { ring: "SI", n: 9 }], ["9.6@", { ring: "D", n: 9 }], ["9.4@", { ring: "T", n: 9 }],
+    ["2.2@", { ring: "SO", n: 10 }], ["2.0@", { ring: "SI", n: 10 }], ["4.3@", { ring: "D", n: 10 }], ["2.1@", { ring: "T", n: 10 }],
+    ["7.5@", { ring: "SO", n: 11 }], ["7.3@", { ring: "SI", n: 11 }], ["7.6@", { ring: "D", n: 11 }], ["7.4@", { ring: "T", n: 11 }],
+    ["5.5@", { ring: "SO", n: 12 }], ["5.0@", { ring: "SI", n: 12 }], ["5.6@", { ring: "D", n: 12 }], ["5.3@", { ring: "T", n: 12 }],
+    ["0.4@", { ring: "SO", n: 13 }], ["0.0@", { ring: "SI", n: 13 }], ["4.5@", { ring: "D", n: 13 }], ["0.2@", { ring: "T", n: 13 }],
+    ["10.5@", { ring: "SO", n: 14 }], ["10.3@", { ring: "SI", n: 14 }], ["10.6@", { ring: "D", n: 14 }], ["10.4@", { ring: "T", n: 14 }],
+    ["3.2@", { ring: "SO", n: 15 }], ["3.0@", { ring: "SI", n: 15 }], ["4.2@", { ring: "D", n: 15 }], ["3.1@", { ring: "T", n: 15 }],
+    ["11.5@", { ring: "SO", n: 16 }], ["11.0@", { ring: "SI", n: 16 }], ["11.6@", { ring: "D", n: 16 }], ["11.3@", { ring: "T", n: 16 }],
+    ["10.2@", { ring: "SO", n: 17 }], ["10.1@", { ring: "SI", n: 17 }], ["8.3@", { ring: "D", n: 17 }], ["10.0@", { ring: "T", n: 17 }],
+    ["1.5@", { ring: "SO", n: 18 }], ["1.2@", { ring: "SI", n: 18 }], ["1.6@", { ring: "D", n: 18 }], ["1.4@", { ring: "T", n: 18 }],
+    ["6.3@", { ring: "SO", n: 19 }], ["6.1@", { ring: "SI", n: 19 }], ["8.5@", { ring: "D", n: 19 }], ["6.0@", { ring: "T", n: 19 }],
+    ["3.5@", { ring: "SO", n: 20 }], ["3.3@", { ring: "SI", n: 20 }], ["3.6@", { ring: "D", n: 20 }], ["3.4@", { ring: "T", n: 20 }],
+    ["OUT@", { ring: "OUT", n: 0 }],
+    ["8.0@", { ring: "SBULL", n: 25 }],
+    ["4.0@", { ring: "DBULL", n: 50 }],
+  ]);
 
   function targetToKeyboardAction(target) {
     if (target.ring === "OUT") return "MISS";
@@ -516,98 +351,6 @@
     if (target.ring === "D") return "D" + target.n;
     if (target.ring === "T") return "T" + target.n;
     return null;
-  }
-
-  function isAllowedForAction(allowed, action) {
-    if (!action) return false;
-    if (allowed.has(action)) return true;
-
-    if (/^D\d{1,2}$/.test(action) && allowed.has("DOUBLE_MOD")) return true;
-    if (/^T\d{1,2}$/.test(action) && allowed.has("TRIPLE_MOD")) return true;
-
-    if (action === "BULL" && allowed.has("DOUBLE_MOD") && allowed.has("25")) return true;
-    return false;
-  }
-
-  /********************************************************************
-   * Autodarts Board-Mode Auto-Switch (best effort)
-   ********************************************************************/
-  let lastModeSwitchAttemptAt = 0;
-
-  function textOf(el) {
-    return (el?.textContent || el?.getAttribute?.("aria-label") || el?.getAttribute?.("title") || "").trim();
-  }
-
-  function findClickableByText(regex) {
-    const candidates = [
-      ...document.querySelectorAll("button"),
-      ...document.querySelectorAll('[role="button"]'),
-      ...document.querySelectorAll("a"),
-      ...document.querySelectorAll("label")
-    ];
-    for (const el of candidates) {
-      const t = textOf(el);
-      if (!t) continue;
-      if (!regex.test(t)) continue;
-
-      if (el.tagName === "BUTTON") {
-        if (!isClickableButton(el)) continue;
-      } else {
-        const st = getComputedStyle(el);
-        if (st.display === "none" || st.visibility === "hidden" || st.pointerEvents === "none") continue;
-      }
-      return el;
-    }
-    return null;
-  }
-
-  function boardLooksAvailable() {
-    return !!document.querySelector('svg[viewBox="0 0 1000 1000"]');
-  }
-
-  async function ensureAutodartsBoardInputModeEnabled() {
-    const now = Date.now();
-    if (now - lastModeSwitchAttemptAt < 1200) return;
-    lastModeSwitchAttemptAt = now;
-
-    if (boardLooksAvailable()) return;
-
-    const direct =
-      findClickableByText(/\b(scheibe|dartscheibe|dartboard|board)\b/i) ||
-      findClickableByText(/\b(board\s*mode|board\s*input|dartboard\s*input)\b/i);
-
-    if (direct) {
-      ui.log('Auto-switch: clicking "' + textOf(direct) + '"');
-      try { direct.click(); } catch {}
-      await sleep(200);
-      return;
-    }
-
-    const settingsBtn =
-      findClickableByText(/\b(settings|einstellungen)\b/i) ||
-      Array.from(document.querySelectorAll("button,[role='button']")).find(el => {
-        const t = textOf(el).toLowerCase();
-        return t.includes("setting") || t.includes("einstellung") || t.includes("gear") || t.includes("cog");
-      });
-
-    if (settingsBtn) {
-      ui.log('Auto-switch: opening settings "' + textOf(settingsBtn) + '"');
-      try { settingsBtn.click(); } catch {}
-      await sleep(200);
-
-      const after =
-        findClickableByText(/\b(scheibe|dartscheibe|dartboard|board)\b/i) ||
-        findClickableByText(/\b(board\s*mode|board\s*input|dartboard\s*input)\b/i);
-
-      if (after) {
-        ui.log('Auto-switch: clicking "' + textOf(after) + '"');
-        try { after.click(); } catch {}
-        await sleep(200);
-        return;
-      }
-    }
-
-    ui.log("Auto-switch: board mode toggle not found (need selector/text).");
   }
 
   /********************************************************************
@@ -644,7 +387,6 @@
       }
     }
 
-    let CAL = loadCal();
     let pointerSeq = 600;
 
     function angleForNumber(n) {
@@ -655,6 +397,7 @@
     }
 
     function pointForKind(kind, n) {
+      const CAL = loadCal();
       const cx = VB.cx + CAL.off_x;
       const cy = VB.cy + CAL.off_y;
 
@@ -662,10 +405,9 @@
 
       if (kind === "SBULL") {
         const ang = (-90 * Math.PI) / 180;
-        const r = SBULL_CLICK_R;
         return {
-          x: (cx + CAL.sbull_off_x) + Math.cos(ang) * r,
-          y: (cy + CAL.sbull_off_y) + Math.sin(ang) * r
+          x: (cx + CAL.sbull_off_x) + Math.cos(ang) * SBULL_CLICK_R,
+          y: (cy + CAL.sbull_off_y) + Math.sin(ang) * SBULL_CLICK_R
         };
       }
 
@@ -712,38 +454,28 @@
       const pid = pointerSeq;
 
       const basePointer = {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        clientX,
-        clientY,
-        pointerId: pid,
-        pointerType: "mouse",
-        isPrimary: true
+        bubbles: true, cancelable: true, composed: true,
+        clientX, clientY, pointerId: pid, pointerType: "mouse", isPrimary: true
       };
       const mouseBase = { bubbles: true, cancelable: true, composed: true, clientX, clientY };
 
       const emit = (type, makeEv) => {
-        for (const t of targets) {
-          try { t.dispatchEvent(makeEv(type)); } catch {}
-        }
+        for (const t of targets) { try { t.dispatchEvent(makeEv(type)); } catch {} }
       };
 
-      emit("pointermove", (type) => new PointerEvent(type, { ...basePointer, buttons: 0 }));
-      emit("mousemove", (type) => new MouseEvent(type, { ...mouseBase, buttons: 0 }));
-      emit("pointerover", (type) => new PointerEvent(type, { ...basePointer, buttons: 0 }));
-      emit("pointerenter", (type) => new PointerEvent(type, { ...basePointer, buttons: 0 }));
-      emit("mouseover", (type) => new MouseEvent(type, mouseBase));
-      emit("pointerdown", (type) => new PointerEvent(type, { ...basePointer, buttons: 1 }));
-      emit("mousedown", (type) => new MouseEvent(type, { ...mouseBase, button: 0, buttons: 1 }));
-      emit("pointerup", (type) => new PointerEvent(type, { ...basePointer, buttons: 0 }));
-      emit("mouseup", (type) => new MouseEvent(type, { ...mouseBase, button: 0, buttons: 0 }));
-      emit("click", (type) => new MouseEvent(type, { ...mouseBase, detail: 1 }));
+      emit("pointermove", (t) => new PointerEvent(t, { ...basePointer, buttons: 0 }));
+      emit("mousemove", (t) => new MouseEvent(t, { ...mouseBase, buttons: 0 }));
+      emit("pointerover", (t) => new PointerEvent(t, { ...basePointer, buttons: 0 }));
+      emit("pointerenter", (t) => new PointerEvent(t, { ...basePointer, buttons: 0 }));
+      emit("mouseover", (t) => new MouseEvent(t, mouseBase));
+      emit("pointerdown", (t) => new PointerEvent(t, { ...basePointer, buttons: 1 }));
+      emit("mousedown", (t) => new MouseEvent(t, { ...mouseBase, button: 0, buttons: 1 }));
+      emit("pointerup", (t) => new PointerEvent(t, { ...basePointer, buttons: 0 }));
+      emit("mouseup", (t) => new MouseEvent(t, { ...mouseBase, button: 0, buttons: 0 }));
+      emit("click", (t) => new MouseEvent(t, { ...mouseBase, detail: 1 }));
     }
 
     async function fire(kind, n) {
-      CAL = loadCal();
-
       const board = findBoardSvg();
       if (!board) throw new Error("Board SVG not found (viewBox 0 0 1000 1000).");
 
@@ -764,8 +496,6 @@
       dispatchSequenceToMany(targets, client.cx, client.cy);
       await sleep(35);
       dispatchSequenceToMany(targets, client.cx, client.cy);
-
-      return { vb: pt, client };
     }
 
     function targetToBoardKind(target) {
@@ -783,75 +513,1246 @@
   })();
 
   /********************************************************************
-   * Router + Inject
+   * UI (Overlay + Settings drawer with Tabs: LED | Board | Logs)
+   ********************************************************************/
+  const STATE = {
+    overlayVisible: DEFAULTS.overlay,
+    settingsOpen: false,
+    inputMode: DEFAULTS.inputMode,
+    logLevel: DEFAULTS.logLevel,
+
+    boardReplyInterval: clamp(DEFAULTS.boardReplyInterval, 0, 255),
+    boardOutSens: clamp(DEFAULTS.boardOutSens, 0, 15),
+    boardTargetSet: DEFAULTS.boardTargetSet,
+
+    connected: false,
+    lastBoardConfirm: "",
+
+    // dart counter (for ignoring miss after 3 darts)
+    dartCount: 0,
+  };
+
+  function createUI() {
+    try { document.getElementById("__gb_overlay__")?.remove(); } catch {}
+    try { document.getElementById("__gb_tab__")?.remove(); } catch {}
+
+    const root = document.createElement("div");
+    root.id = "__gb_overlay__";
+    root.style.cssText =
+      "position:fixed;right:12px;bottom:12px;z-index:2147483647;" +
+      "background:rgba(8,10,14,.30);backdrop-filter: blur(7px);-webkit-backdrop-filter: blur(7px);" +
+      "color:#fff;padding:10px 12px;border-radius:14px;" +
+      "font:12px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;" +
+      "width:430px;max-width:calc(100vw - 24px);" +
+      "box-shadow:0 10px 35px rgba(0,0,0,.30);" +
+      "border:1px solid rgba(255,255,255,.14);";
+
+    const tab = document.createElement("button");
+    tab.id="__gb_tab__";
+    tab.textContent="GB";
+    tab.title="GranBoard overlay";
+    tab.style.cssText =
+      "position:fixed;right:12px;bottom:12px;z-index:2147483647;" +
+      "width:44px;height:44px;aspect-ratio:1/1;" +
+      "padding:0;border-radius:50%;" +
+      "display:none;align-items:center;justify-content:center;" +
+      "border:2px solid rgba(255,80,80,.95);" +
+      "background:rgba(8,10,14,.35);backdrop-filter: blur(7px);-webkit-backdrop-filter: blur(7px);" +
+      "color:#fff;cursor:pointer;font:12px system-ui;" +
+      "box-shadow:0 0 14px rgba(255,80,80,.35);";
+
+    root.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
+        <div style="font-weight:700;font-size:14px;">GranBoard → Autodarts</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="gb-btn-settings" title="${t("settings")}" style="
+            padding:6px 10px;height:28px;border-radius:10px;
+            border:1px solid rgba(255,255,255,.16);
+            background:rgba(255,255,255,.10);
+            color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+            font-size:12px;font-weight:700;line-height:1;
+          ">${t("settings")}</button>
+          <button id="gb-btn-hide" title="${t("hide")}" style="
+            padding:6px 10px;height:28px;border-radius:10px;
+            border:1px solid rgba(255,255,255,.16);
+            background:rgba(255,255,255,.10);
+            color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+            font-size:12px;font-weight:700;line-height:1;
+          ">${t("hide")}</button>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;opacity:.92;font-size:11px;">
+        <div>Status: <span id="gb-status" style="font-weight:700;">disconnected</span></div>
+        <div>Device: <span id="gb-device">—</span></div>
+        <div>Mode: <span id="gb-mode">—</span></div>
+        <div>RAW: <span id="gb-raw">—</span></div>
+        <div>Action: <span id="gb-action">—</span></div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap;">
+        <button id="gb-connect" style="
+          padding:6px 12px;border-radius:12px;border:1px solid rgba(60,180,110,.50);
+          cursor:pointer;background:rgba(60,180,110,.22);color:#fff;font-weight:700;
+          font-size:12px;line-height:1.2;display:inline-block;min-width:132px;
+        ">${t("connect")}</button>
+</div>
+
+      <div id="gb-settings" style="display:none;margin-top:12px;">
+        
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+          <button class="gb-tab" data-tab="control" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-weight:700;cursor:pointer;font-size:12px;min-height:28px;">Control</button>
+          <button class="gb-tab" data-tab="led" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-weight:700;cursor:pointer;font-size:12px;min-height:28px;">LED</button>
+          <button class="gb-tab" data-tab="board" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-weight:700;cursor:pointer;font-size:12px;min-height:28px;">Board</button>
+          <button class="gb-tab" data-tab="logs" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff;font-weight:700;cursor:pointer;font-size:12px;min-height:28px;">Logs</button>
+        </div>
+
+        <div id="gb-tab-control" class="gb-tabpane" style="display:none;"></div>
+        <div id="gb-tab-led" class="gb-tabpane" style="display:none;max-height:240px;overflow:auto;padding-right:6px;"></div>
+        <div id="gb-tab-board" class="gb-tabpane" style="display:none;"></div>
+        <div id="gb-tab-logs" class="gb-tabpane" style="display:none;"></div>
+      </div>
+
+      <div id="gb-log-wrap" style="margin-top:12px;max-height:200px;overflow:auto;font-size:11px;opacity:.92;display:none;">
+        <div style="font-weight:700;margin-bottom:6px;">Log</div>
+        <div id="gb-log"></div>
+      </div>
+    `;
+
+    document.documentElement.appendChild(root);
+    document.documentElement.appendChild(tab);
+
+    const $ = (sel) => root.querySelector(sel);
+
+    const logEl = $("#gb-log");
+    function logLine(level, msg) {
+      // level: "basic" | "adv"
+      const ll = STATE.logLevel;
+      if (ll === "off") return;
+      if (ll === "basic" && level === "adv") return;
+
+      $("#gb-log-wrap").style.display = (ll === "off") ? "none" : "block";
+
+      const div = document.createElement("div");
+      div.textContent = `[${ts()}] ${msg}`;
+      logEl.prepend(div);
+    }
+
+    return {
+      root,
+      tab,
+      btnHide: $("#gb-btn-hide"),
+      btnSettings: $("#gb-btn-settings"),
+      settingsWrap: $("#gb-settings"),
+      connectBtn: $("#gb-connect"),
+      status: $("#gb-status"),
+      device: $("#gb-device"),
+      mode: $("#gb-mode"),
+      raw: $("#gb-raw"),
+      action: $("#gb-action"),
+
+      tabButtons: Array.from(root.querySelectorAll(".gb-tab")),
+      paneControl: $("#gb-tab-control"),
+      paneLed: $("#gb-tab-led"),
+      paneBoard: $("#gb-tab-board"),
+      paneLogs: $("#gb-tab-logs"),
+
+      logBasic: (m) => logLine("basic", m),
+      logAdv: (m) => logLine("adv", m),
+    };
+  }
+
+  let ui = createUI();
+
+  function setOverlayVisible(v) {
+    STATE.overlayVisible = !!v;
+    saveBool(STORAGE.OVERLAY, STATE.overlayVisible);
+    ui.root.style.display = STATE.overlayVisible ? "block" : "none";
+    ui.tab.style.display = STATE.overlayVisible ? "none" : "flex";
+    updateGbTabPosition();
+  }
+
+  function setSettingsOpen(v) {
+    STATE.settingsOpen = !!v;
+    ui.settingsWrap.style.display = STATE.settingsOpen ? "block" : "none";
+    if (STATE.settingsOpen) activateSettingsTab("led");
+  }
+
+  function paintStatus() {
+    ui.status.style.fontWeight = "900";
+    if (STATE.connected) {
+      ui.status.style.color = "rgba(60,220,120,.98)";
+      ui.status.textContent = "connected";
+    } else {
+      ui.status.style.color = "rgba(255,80,80,.98)";
+      ui.status.textContent = "disconnected";
+    }
+    ui.connectBtn.textContent = STATE.connected ? t("disconnect") : t("connect");
+    ui.connectBtn.style.background = STATE.connected ? "rgba(255,90,90,.20)" : "rgba(60,180,110,.22)";
+    ui.connectBtn.style.borderColor = STATE.connected ? "rgba(255,90,90,.50)" : "rgba(60,180,110,.50)";
+    ui.tab.style.borderColor = STATE.connected ? "rgba(60,220,120,.95)" : "rgba(255,80,80,.95)";
+    ui.tab.style.boxShadow = STATE.connected ? "0 0 14px rgba(60,220,120,.35)" : "0 0 14px rgba(255,80,80,.35)";
+  }
+
+  function activateSettingsTab(tabKey) {
+    for (const b of ui.tabButtons) {
+      const active = b.getAttribute("data-tab") === tabKey;
+      b.style.background = active ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.08)";
+      b.style.borderColor = active ? "rgba(255,255,255,.22)" : "rgba(255,255,255,.16)";
+    }
+    ui.paneControl.style.display = (tabKey === "control") ? "block" : "none";
+    ui.paneLed.style.display = (tabKey === "led") ? "block" : "none";
+    ui.paneBoard.style.display = (tabKey === "board") ? "block" : "none";
+    ui.paneLogs.style.display = (tabKey === "logs") ? "block" : "none";
+  }
+
+  ui.tabButtons.forEach(btn => btn.addEventListener("click", () => activateSettingsTab(btn.getAttribute("data-tab"))));
+
+  ui.btnHide.addEventListener("click", () => setOverlayVisible(false));
+  ui.tab.addEventListener("click", () => setOverlayVisible(true));
+  ui.btnSettings.addEventListener("click", () => setSettingsOpen(!STATE.settingsOpen));
+setOverlayVisible(STATE.overlayVisible);
+  paintStatus();
+
+  /********************************************************************
+   * Hide-mode tab positioning vs Autodarts chat icon
+   ********************************************************************/
+  function isNearBottomRight(rect) {
+    return (innerWidth - rect.right) < 140 && (innerHeight - rect.bottom) < 140;
+  }
+
+  function looksLikeChatIconButton(btn) {
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (!isElementVisible(btn)) return false;
+    const svg = btn.querySelector("svg[viewBox='0 0 24 24']");
+    if (!svg) return false;
+    const paths = Array.from(svg.querySelectorAll("path")).map(p => p.getAttribute("d") || "");
+    return paths.some(d => d.includes("M20 2H4c-1.1"));
+  }
+
+  function findChatButton() {
+    const buttons = Array.from(document.querySelectorAll("button"));
+    for (const b of buttons) {
+      if (!looksLikeChatIconButton(b)) continue;
+      const r = b.getBoundingClientRect();
+      if (!isNearBottomRight(r)) continue;
+      return b;
+    }
+    return null;
+  }
+
+  function resetGbTabToCorner() {
+    ui.tab.style.left = "";
+    ui.tab.style.top = "";
+    ui.tab.style.right = "12px";
+    ui.tab.style.bottom = "12px";
+  }
+
+  function anchorGbTabLeftOfChat(chatBtn) {
+    const chatRect = chatBtn.getBoundingClientRect();
+    const tabRect = ui.tab.getBoundingClientRect();
+    const gap = 10;
+    const x = Math.max(12, Math.round(chatRect.left - tabRect.width - gap));
+    const y = Math.max(12, Math.round(chatRect.top + (chatRect.height - tabRect.height) / 2));
+    ui.tab.style.right = "";
+    ui.tab.style.bottom = "";
+    ui.tab.style.left = x + "px";
+    ui.tab.style.top = y + "px";
+  }
+
+  function updateGbTabPosition() {
+    if (!ui?.tab) return;
+    if (STATE.overlayVisible) {
+      resetGbTabToCorner();
+      return;
+    }
+    if (ui.tab.style.display === "none") return;
+
+    const chatBtn = findChatButton();
+    if (chatBtn) anchorGbTabLeftOfChat(chatBtn);
+    else resetGbTabToCorner();
+  }
+
+  window.addEventListener("resize", () => setTimeout(updateGbTabPosition, 50), { passive: true });
+  setInterval(updateGbTabPosition, 700);
+
+  /********************************************************************
+   * LED Presets (compatible to your HTML approach)
+   ********************************************************************/
+  function frame16(op){
+    const u8 = new Uint8Array(16);
+    u8[0]=op & 0xFF;
+    u8[15]=0x01;
+    return u8;
+  }
+
+  // Built-in “classic” frames you gave (connect/next/hit/miss)
+  const PRESETS = [
+    {
+      key:"classic_connect",
+      name:"Connect (Classic)",
+      tag:"Fixed frame (1D ...)",
+      colors:0,
+      defaultSpeed:10,
+      build:(speed, a, b)=>{
+        // speed ignored (kept for UI consistency)
+        return hexToU8("1D 4D FF 00 00 00 00 00 00 00 00 00 0A 00 00 01");
+      }
+    },
+    {
+      key:"classic_next",
+      name:"Next (Classic)",
+      tag:"11 ... (2-segment) · 2 colors + speed",
+      colors:2,
+      defaultSpeed:5,
+      build:(speed, a, b)=>{
+        const u8 = frame16(0x11);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[6]=b.r; u8[7]=b.g; u8[8]=b.b;
+        u8[10]=0x10; u8[11]=0x00;
+        u8[12]=clamp(speed,0,255);
+        return u8;
+      }
+    },
+    {
+      key:"classic_hit_single",
+      name:"Hit Single (Classic)",
+      tag:"01 ... (color+speed fixed) · (dynamic target hit)",
+      colors:2,
+      defaultSpeed:20,
+      build:(speed, a, b)=>{
+        return hexToU8("01 FF 00 00 FF 95 00 00 00 00 1C 00 14 00 00 01");
+      }
+    },
+    {
+      key:"classic_hit_triple",
+      name:"Hit Triple (Classic)",
+      tag:"03 ... (corrected: triple) · (dynamic target hit)",
+      colors:2,
+      defaultSpeed:20,
+      build:(speed, a, b)=>{
+        return hexToU8("03 FF 00 00 FF 95 00 00 00 00 1C 00 14 00 00 01");
+      }
+},
+    {
+      key:"classic_hit_double",
+      name:"Hit Double (Classic)",
+      tag:"02 ... (corrected: double) · (dynamic target hit)",
+      colors:2,
+      defaultSpeed:20,
+      build:(speed, a, b)=>{
+        return hexToU8("02 FF 00 00 FF 95 00 00 00 00 1C 00 14 00 00 01");
+      }
+},
+    {
+      key:"classic_miss",
+      name:"Miss (Classic Blink)",
+      tag:"17 ... (blink) · color + speed",
+      colors:1,
+      defaultSpeed:4,
+      build:(speed, a)=>{
+        const u8 = frame16(0x17);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=clamp(speed,0,255);
+        return u8;
+      }
+    },
+
+    // ===== Presets from your HTML style (color+speed options) =====
+    // Preset-Speed: 35 (slow) .. 0 (fast)  -> UI slider maps to this range
+    {
+      key:"op0c",
+      name:"Touch Rainbow",
+      tag:"OP0C · color + speed (board may ignore color)",
+      colors:0,
+      defaultSpeed:5,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0C);
+        u8[1]=0x00; u8[2]=0x00; u8[3]=0x00;
+        u8[12]=clamp(speed,0,255);
+        return u8;
+      }
+    },
+    {
+      key:"op0f",
+      name:"Rainbow Rotate (3 Segments)",
+      tag:"OP0F · color + speed",
+      colors:0,
+      defaultSpeed:5,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0F);
+        u8[1]=0x00; u8[2]=0x00; u8[3]=0x00;
+        u8[12]=clamp(speed,0,255);
+        return u8;
+      }
+    },
+    {
+      key:"op10",
+      name:"Split Rainbow",
+      tag:"OP10 · color + speed",
+      colors:0,
+      defaultSpeed:5,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x10);
+        u8[1]=0x00; u8[2]=0x00; u8[3]=0x00;
+        u8[12]=clamp(speed,0,255);
+        return u8;
+      }
+    },
+    {
+      key:"op0d",
+      name:"Rainbow Touch + Flicker",
+      tag:"OP0D · rainbow + speed",
+      colors:0,
+      defaultSpeed:20,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0D);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[11]=0x02;
+        u8[12]=speed & 0xFF;
+        u8[13]=0x02;
+        return u8;
+      }
+    },
+    {
+      key:"op14",
+      name:"Pulse",
+      tag:"OP14 · color + speed",
+      colors:1,
+      defaultSpeed:20,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x14);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[4]=0x7D;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op15",
+      name:"Dark Solid (Low Brightness)",
+      tag:"OP15 · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x15);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op16",
+      name:"Color Cycle",
+      tag:"OP16 · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x16);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op17",
+      name:"Flash / Blink",
+      tag:"OP17 · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x17);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op18",
+      name:"Flicker",
+      tag:"OP18 · color + speed",
+      colors:1,
+      defaultSpeed:20,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x18);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op19",
+      name:"Hunt Flicker",
+      tag:"OP19 · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x19);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        // pattern/mode bytes like the working HTML version
+        u8[11]=0x02;
+        u8[12]=speed & 0xFF;
+        u8[13]=0x02;
+        return u8;
+      }
+    },
+    {
+      key:"op1b",
+      name:"Shake",
+      tag:"OP1B · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x1B);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op1d",
+      name:"Fade / Sweep + Fade",
+      tag:"OP1D · color + speed",
+      colors:1,
+      defaultSpeed:10,
+      speedMax:35,
+      build:(speed, a)=>{
+        const u8 = frame16(0x1D);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op11_next",
+      name:"Next (2-Segment)",
+      tag:"OP11 · 2 colors · speed",
+      colors:2,
+      defaultSpeed:5,
+      speedMax:35,
+      build:(speed, a, b)=>{
+        const u8 = frame16(0x11);
+        // Color A
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        // Color B
+        u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+        u8[10]=0x10;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    },
+    {
+      key:"op1f",
+      name:"Bull Multicolor Fade (Classic)",
+      tag:"OP1F · 3 colors + speed",
+      colors:3,
+      defaultSpeed:12,
+      speedMax:35,
+      build:(speed, a, b, c)=>{
+        const u8 = frame16(0x1F);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+        u8[7]=c.r; u8[8]=c.g; u8[9]=c.b;
+        u8[12]=speed & 0xFF;
+        return u8;
+      }
+    }
+  ];
+
+  function getPresetByKey(key) {
+    return PRESETS.find(p => p.key === key) || PRESETS[0];
+  }
+
+  const REACTIONS = [
+    { id:"connect",      label:"Connect" },
+    { id:"next",         label:"Next" },
+    { id:"hit_single",   label:"Hit Single" },
+    { id:"hit_double",   label:"Hit Double" },
+    { id:"hit_triple",   label:"Hit Triple" },
+    { id:"miss",         label:"Miss" },
+    { id:"bull_single",  label:"Single Bull" },
+    { id:"bull_double",  label:"Double Bull" },
+  ];
+
+  function defaultReactionConfig(id) {
+    // keep previous defaults logically:
+    if (id === "connect") return { enabled:true, presetKey:"classic_connect", speed:10, colorA:"#FF0000", colorB:"#00FFFF" };
+    if (id === "next") return { enabled:true, presetKey:"classic_next", speed:5, colorA:"#FF0000", colorB:"#00FFFF" };
+    if (id === "hit_single") return { enabled:true, presetKey:"classic_hit_single", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
+    if (id === "hit_double") return { enabled:true, presetKey:"classic_hit_double", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
+    if (id === "hit_triple") return { enabled:true, presetKey:"classic_hit_triple", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
+    if (id === "miss") return { enabled:true, presetKey:"classic_miss", speed:4, colorA:"#FF0000", colorB:"#00FFFF" };
+    if (id === "bull_single") return { enabled:true, presetKey:"op1f", speed:20, colorA:"#FF0000", colorB:"#FFA500", colorC:"#00FFFF" };
+    if (id === "bull_double") return { enabled:true, presetKey:"op14", speed:10, colorA:"#FFD000", colorB:"#00FFFF" };
+    return { enabled:false, presetKey:PRESETS[0].key, speed:10, colorA:"#FF0000", colorB:"#00FFFF", colorC:"#00FFFF" };
+  }
+
+  function loadReactionConfig(id) {
+    try {
+      const raw = localStorage.getItem(STORAGE.LED_REACTION_PREFIX + id);
+      if (!raw) return defaultReactionConfig(id);
+      const obj = JSON.parse(raw);
+      return { ...defaultReactionConfig(id), ...obj };
+    } catch {
+      return defaultReactionConfig(id);
+    }
+  }
+
+  function saveReactionConfig(id, cfg) {
+    try { localStorage.setItem(STORAGE.LED_REACTION_PREFIX + id, JSON.stringify(cfg)); } catch {}
+  }
+
+  function buildLedFrameFromConfig(cfg) {
+    const preset = getPresetByKey(cfg.presetKey);
+
+    const a = parseHexColor(cfg.colorA);
+    const b = parseHexColor(cfg.colorB);
+    const c = parseHexColor(cfg.colorC);
+
+    const max = (typeof preset.speedMax === "number") ? preset.speedMax : 255;
+    const speed = clamp((cfg.speed ?? preset.defaultSpeed ?? 0), 0, max);
+
+    // preset.colors: 0,1,2,3 ...
+    if (preset.colors >= 3) return preset.build(speed, a, b, c);
+    if (preset.colors >= 2) return preset.build(speed, a, b);
+    if (preset.colors >= 1) return preset.build(speed, a);
+    return preset.build(speed, a, b, c);
+  }
+
+  /********************************************************************
+   * BLE
+   ********************************************************************/
+  let device = null;
+  let server = null;
+  let notifyChar = null;
+  let writeChar = null;
+
+  let streamBuffer = new Uint8Array(0);
+
+  function appendToBuffer(u8) {
+    const merged = new Uint8Array(streamBuffer.length + u8.length);
+    merged.set(streamBuffer, 0);
+    merged.set(u8, streamBuffer.length);
+    streamBuffer = merged;
+  }
+
+  function extractFrames() {
+    const frames = [];
+    while (true) {
+      const idx = streamBuffer.indexOf(0x40); // '@'
+      if (idx === -1) break;
+      frames.push(streamBuffer.slice(0, idx + 1));
+      streamBuffer = streamBuffer.slice(idx + 1);
+    }
+    return frames;
+  }
+
+  async function bleWrite(u8, tag) {
+    if (!writeChar) return false;
+    try {
+      ui.logAdv(`TX (${tag||"write"}) HEX=${u8ToHex(u8)}`);
+      if (writeChar.properties.writeWithoutResponse) await writeChar.writeValueWithoutResponse(u8);
+      else await writeChar.writeValue(u8);
+      return true;
+    } catch (e) {
+      ui.logAdv("TX failed: " + (e?.message || e));
+      return false;
+    }
+  }
+
+  async function dispatchLed(reactionId, reason, target) {
+    if (!STATE.connected || !writeChar) return;
+
+    const cfg = loadReactionConfig(reactionId);
+    if (!cfg.enabled) return;
+
+    const preset = getPresetByKey(cfg.presetKey);
+
+    // Dynamic "Target Hit" frames (fix: was always lighting segment 1)
+    // Mapping taken from the working LED Control HTML (S1..S20 -> target id).
+    const SEG_TARGET_ID = {
+      1:  0x001C,  2:  0x0031,  3:  0x0037,  4:  0x0022,  5:  0x0016,
+      6:  0x0028,  7:  0x0001,  8:  0x0007,  9:  0x0010,  10: 0x002B,
+      11: 0x000A, 12: 0x0013, 13: 0x0025, 14: 0x000D, 15: 0x002E,
+      16: 0x0004, 17: 0x0034, 18: 0x001F, 19: 0x003A, 20: 0x0019,
+    };
+
+    function buildHitFrame(hitType, segN, colorA, colorB, speedByte) {
+      const tid = SEG_TARGET_ID[segN] ?? 0x0000;
+      const u8 = new Uint8Array(16);
+      u8[0] = hitType & 0xFF;
+      u8[1] = colorA.r; u8[2] = colorA.g; u8[3] = colorA.b;
+      u8[4] = colorB.r; u8[5] = colorB.g; u8[6] = colorB.b;
+      u8[10] = tid & 0xFF;
+      u8[11] = (tid >> 8) & 0xFF;
+      u8[12] = clamp(speedByte|0, 0, 255);
+      u8[15] = 0x01;
+      return u8;
+    }
+
+    let frame = null;
+
+    // If the user kept the "classic hit" presets, we turn them into proper target-hit frames.
+    if (preset.key && preset.key.startsWith("classic_hit_") && target && target.n >= 1 && target.n <= 20) {
+      const a = parseHexColor(cfg.colorA || "#FF0000");
+      const b = parseHexColor(cfg.colorB || "#FF7A00");
+      const speed = clamp(cfg.speed ?? 20, 0, 255);
+
+      if (reactionId === "hit_double") frame = buildHitFrame(0x02, target.n, a, b, speed);
+      else if (reactionId === "hit_triple") frame = buildHitFrame(0x03, target.n, a, b, speed);
+      else frame = buildHitFrame(0x01, target.n, a, b, speed);
+    } else {
+      frame = buildLedFrameFromConfig(cfg);
+    }
+
+    await bleWrite(frame, `LED:${reactionId}:${preset.key}`);
+    if (reason) ui.logAdv(`LED ${reactionId} (${preset.key}) via ${reason}`);
+  }
+
+  /********************************************************************
+   * Board Settings (BLE write frames)
+   ********************************************************************/
+  function buildReplyIntervalFrame(val) {
+    // ends with ASCII "45" -> 0x34 0x35
+    const u8 = new Uint8Array(12);
+    u8[0]=clamp(val,0,255);
+    u8[10]=0x34; u8[11]=0x35;
+    return u8;
+  }
+
+  function buildOutSensFrame(val) {
+    // ends with ASCII "67" -> 0x36 0x37
+    const u8 = new Uint8Array(12);
+    u8[0]=clamp(val,0,15);
+    u8[10]=0x36; u8[11]=0x37;
+    return u8;
+  }
+
+  const TARGET_SETS = {
+    set1: hexToU8("00 00 00 4B 04 05 00 00 00 00 3A 3B"),
+    set2: hexToU8("00 00 00 73 02 05 00 00 00 00 3A 3B"),
+    set3: hexToU8("00 00 00 96 02 05 00 00 00 00 3A 3B"),
+    set4: hexToU8("00 00 00 96 00 0A 00 00 00 00 3A 3B"),
+  };
+
+  async function applyBoardSetting(kind) {
+    if (!STATE.connected || !writeChar) return false;
+
+    if (kind === "reply") {
+      const u8 = buildReplyIntervalFrame(STATE.boardReplyInterval);
+      const ok = await bleWrite(u8, "Board:replyInterval");
+      return ok;
+    }
+    if (kind === "out") {
+      const u8 = buildOutSensFrame(STATE.boardOutSens);
+      const ok = await bleWrite(u8, "Board:outSens");
+      return ok;
+    }
+    if (kind === "set") {
+      const u8 = TARGET_SETS[STATE.boardTargetSet] || TARGET_SETS.set2;
+      const ok = await bleWrite(u8, "Board:targetSet");
+      return ok;
+    }
+    return false;
+  }
+
+  /********************************************************************
+   * UI: LED Tab + Board Tab + Logs Tab render
+   ********************************************************************/
+  function renderLogsTab() {
+    ui.paneLogs.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="display:flex;flex-direction:column;gap:6px;font-weight:800;">
+          Log level
+          <select id="gb-loglevel" style="padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;">
+            <option value="off">Off</option>
+            <option value="basic">Basic</option>
+            <option value="adv">Advanced</option>
+          </select>
+        </label>
+      </div>
+      `;
+    const sel = ui.paneLogs.querySelector("#gb-loglevel");
+    sel.value = STATE.logLevel;
+    sel.addEventListener("change", () => {
+      STATE.logLevel = sel.value || "basic";
+      saveStr(STORAGE.LOG_LEVEL, STATE.logLevel);
+      const lw = document.querySelector("#gb-log-wrap");
+      if (lw) lw.style.display = (STATE.logLevel === "off") ? "none" : "block";
+      ui.logAdv("LogLevel = " + STATE.logLevel);
+    });
+  }
+
+  
+  function renderControlTab() {
+    ui.paneControl.innerHTML = `
+      <div style="display:grid;gap:10px;">
+        <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
+          <div style="font-weight:900;margin-bottom:6px;">Auto view switching</div>
+          <div style="opacity:.85;font-size:11px;line-height:1.35;margin-bottom:10px;">
+            <b>Auto</b> = Script entscheidet je nach Spiel / Eingabe automatisch (Keyboard oder Board).<br/>
+            <b>Keyboard</b> = immer Keyboard-View (Zahlen-Buttons).<br/>
+            <b>Board</b> = immer Board-View (Segmente).
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="gb-control-inputmode" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;min-width:160px;font-size:12px;min-height:28px;">
+              <option value="auto">${t("auto")}</option>
+              <option value="keyboard">${t("keyboard")}</option>
+              <option value="board">${t("board")}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    `;
+    const sel = ui.paneControl.querySelector("#gb-control-inputmode");
+    if (!sel) return;
+    sel.value = STATE.inputMode;
+    sel.addEventListener("change", () => {
+      STATE.inputMode = sel.value || "auto";
+      saveStr(STORAGE.INPUT_MODE, STATE.inputMode);
+ui.logAdv("InputMode = " + STATE.inputMode);
+    });
+  }
+
+function renderBoardTab() {
+    ui.paneBoard.innerHTML = `
+      <div style="display:grid;gap:10px;">
+        <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
+          <div style="font-weight:700;margin-bottom:6px;">Reply interval</div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input id="gb-reply" type="range" min="0" max="12" value="${STATE.boardReplyInterval}" style="flex:1;">
+            <div id="gb-reply-val" style="min-width:44px;text-align:center;font-weight:700;opacity:.9;">${STATE.boardReplyInterval}</div>
+            <button id="gb-reply-apply" style="padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.10);color:#fff;font-weight:700;cursor:pointer;">Apply</button>
+          </div>
+          <div id="gb-reply-confirm" style="margin-top:6px;font-size:11px;opacity:.85;">Last confirm: <span id="gb-reply-confirm-txt">—</span></div>
+        </div>
+
+        <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
+          <div style="font-weight:700;margin-bottom:6px;">Out sensitivity</div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input id="gb-out" type="range" min="0" max="15" value="${STATE.boardOutSens}" style="flex:1;">
+            <div id="gb-out-val" style="min-width:44px;text-align:center;font-weight:700;opacity:.9;">${STATE.boardOutSens}</div>
+            <button id="gb-out-apply" style="padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.10);color:#fff;font-weight:700;cursor:pointer;">Apply</button>
+          </div>
+          <div id="gb-out-confirm" style="margin-top:6px;font-size:11px;opacity:.85;">Last confirm: <span id="gb-out-confirm-txt">—</span></div>
+        </div>
+
+        <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
+          <div style="font-weight:700;margin-bottom:6px;">Target sensitivity (SET1–SET4)</div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="gb-set" style="padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;min-width:132px;">
+              <option value="set1">SET1</option>
+              <option value="set2">SET2</option>
+              <option value="set3">SET3</option>
+              <option value="set4">SET4</option>
+            </select>
+            <button id="gb-set-apply" style="padding:8px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.10);color:#fff;font-weight:700;cursor:pointer;">Apply</button>
+          </div>
+</div>
+      </div>
+    `;
+
+    const reply = ui.paneBoard.querySelector("#gb-reply");
+    const replyVal = ui.paneBoard.querySelector("#gb-reply-val");
+    const replyApply = ui.paneBoard.querySelector("#gb-reply-apply");
+    const replyConfirmTxt = ui.paneBoard.querySelector("#gb-reply-confirm-txt");
+
+    const out = ui.paneBoard.querySelector("#gb-out");
+    const outVal = ui.paneBoard.querySelector("#gb-out-val");
+    const outApply = ui.paneBoard.querySelector("#gb-out-apply");
+    const outConfirmTxt = ui.paneBoard.querySelector("#gb-out-confirm-txt");
+
+    const setSel = ui.paneBoard.querySelector("#gb-set");
+    const setApply = ui.paneBoard.querySelector("#gb-set-apply");
+
+    setSel.value = STATE.boardTargetSet;
+
+    replyConfirmTxt.textContent = STATE.lastBoardConfirm || "—";
+    outConfirmTxt.textContent = STATE.lastBoardConfirm || "—";
+
+    reply.addEventListener("input", () => {
+      STATE.boardReplyInterval = +reply.value;
+      replyVal.textContent = String(STATE.boardReplyInterval);
+      saveNum(STORAGE.BS_REPLY_INTERVAL, STATE.boardReplyInterval);
+    });
+
+    out.addEventListener("input", () => {
+      STATE.boardOutSens = +out.value;
+      outVal.textContent = String(STATE.boardOutSens);
+      saveNum(STORAGE.BS_OUT_SENS, STATE.boardOutSens);
+    });
+
+    setSel.addEventListener("change", () => {
+      STATE.boardTargetSet = setSel.value || "set2";
+      saveStr(STORAGE.BS_TARGET_SET, STATE.boardTargetSet);
+    });
+
+    replyApply.addEventListener("click", async () => {
+      const ok = await applyBoardSetting("reply");
+      if (ok) replyConfirmTxt.textContent = ts();
+      if (!ok) ui.logAdv("Board reply apply failed");
+    });
+
+    outApply.addEventListener("click", async () => {
+      const ok = await applyBoardSetting("out");
+      if (ok) outConfirmTxt.textContent = ts();
+      if (!ok) ui.logAdv("Board out apply failed");
+    });
+
+    setApply.addEventListener("click", async () => {
+      const ok = await applyBoardSetting("set");
+      if (!ok) ui.logAdv("Board set apply failed");
+    });
+  }
+
+
+  function renderLedTab() {
+    // Helpers copied from the working GranBoard LED Control HTML
+    function speedToHex(n){ return "0x" + (clamp(n|0,0,255)).toString(16).padStart(2,"0").toUpperCase(); }
+
+    // Preset-Speed: 35 (slow) .. 0 (fast)  -> Slider left slow, right fast
+    function presetSliderToSpeed(v0_100){
+      const t = Math.min(100, Math.max(0, Number(v0_100))) / 100;
+      const slow = 35, fast = 0;
+      return Math.round(slow + (fast - slow) * t); // 35..0
+    }
+    function setPresetSliderDefault(sliderEl, defaultByte){
+      defaultByte = clamp(defaultByte|0, 0, 35);
+      let best=0, bestDiff=999;
+      for(let i=0;i<=100;i++){
+        const s=presetSliderToSpeed(i);
+        const d=Math.abs(s-defaultByte);
+        if(d<bestDiff){bestDiff=d;best=i;}
+      }
+      sliderEl.value = String(best);
+    }
+
+    const presetOptions = PRESETS.map(p => `<option value="${p.key}">${p.name}</option>`).join("");
+
+    function reactionCard(r) {
+      const cfg = loadReactionConfig(r.id);
+      const preset = getPresetByKey(cfg.presetKey);
+
+      const cA = cfg.colorA || "#FF0000";
+      const cB = cfg.colorB || "#FF7A00";
+      const cC = cfg.colorC || "#00FFFF";
+
+      // For HTML-style presets we use 0..35 and map from 0..100.
+      // For others, still show the same slider (sends 0..35), because most effects only use low bytes anyway.
+      const spd = clamp(cfg.speed ?? preset.defaultSpeed ?? 10, 0, 35);
+
+      const showA = (preset.colors || 0) >= 1;
+      const showB = (preset.colors || 0) >= 2;
+      const showC = (preset.colors || 0) >= 3;
+
+      return `
+        <div style="border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);border-radius:12px;padding:10px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;">
+            <div style="font-weight:800;font-size:12px;">${r.label}</div>
+            <label style="display:flex;gap:6px;align-items:center;font-weight:700;font-size:12px;cursor:pointer;">
+              <input type="checkbox" data-led-enabled="${r.id}" ${cfg.enabled ? "checked":""}/>
+              Enabled
+            </label>
+          </div>
+
+          <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+            <label style="display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:12px;">
+              Preset
+              <select data-led-preset="${r.id}" style="padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;min-width:220px;">
+                ${presetOptions}
+              </select>
+            </label>
+
+            <label style="display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:12px;">
+              Speed
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input data-led-speed="${r.id}" type="range" min="0" max="100" value="50" style="width:170px;">
+                <div data-led-speedhex="${r.id}" style="min-width:54px;text-align:center;font-size:11px;opacity:.85;border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 8px;background:rgba(0,0,0,.20);">${speedToHex(spd)}</div>
+              </div>
+            </label>
+
+            <label data-led-wrap-cola="${r.id}" style="display:${showA ? "flex":"none"};flex-direction:column;gap:6px;font-weight:700;font-size:12px;">
+              Color A
+              <input data-led-cola="${r.id}" type="color" value="${cA}" style="width:40px;height:30px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;">
+            </label>
+
+            <label data-led-wrap-colb="${r.id}" style="display:${showB ? "flex":"none"};flex-direction:column;gap:6px;font-weight:700;font-size:12px;">
+              Color B
+              <input data-led-colb="${r.id}" type="color" value="${cB}" style="width:40px;height:30px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;">
+            </label>
+
+            <label data-led-wrap-colc="${r.id}" style="display:${showC ? "flex":"none"};flex-direction:column;gap:6px;font-weight:700;font-size:12px;">
+              Color C
+              <input data-led-colc="${r.id}" type="color" value="${cC}" style="width:40px;height:30px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;">
+            </label>
+
+            <button data-led-test="${r.id}" style="
+              padding:6px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.16);
+              background:rgba(255,255,255,.10);color:#fff;font-weight:700;font-size:12px;cursor:pointer;
+              ${STATE.connected ? "" : "opacity:.45;pointer-events:none;"}
+            ">Test</button>
+          </div>
+
+          <div data-led-hint="${r.id}" style="margin-top:8px;font-size:11px;opacity:.78;">—</div>
+        </div>
+      `;
+    }
+
+    ui.paneLed.innerHTML = REACTIONS.map(reactionCard).join("");
+
+    // Bind UI
+    for (const r of REACTIONS) {
+      const enabledEl = ui.paneLed.querySelector(`[data-led-enabled="${r.id}"]`);
+      const presetEl = ui.paneLed.querySelector(`[data-led-preset="${r.id}"]`);
+      const speedEl = ui.paneLed.querySelector(`[data-led-speed="${r.id}"]`);
+      const speedHexEl = ui.paneLed.querySelector(`[data-led-speedhex="${r.id}"]`);
+      const colAEl = ui.paneLed.querySelector(`[data-led-cola="${r.id}"]`);
+      const colBEl = ui.paneLed.querySelector(`[data-led-colb="${r.id}"]`);
+      const colCEl = ui.paneLed.querySelector(`[data-led-colc="${r.id}"]`);
+      const testEl = ui.paneLed.querySelector(`[data-led-test="${r.id}"]`);
+      const hintEl = ui.paneLed.querySelector(`[data-led-hint="${r.id}"]`);
+
+      const cfg = loadReactionConfig(r.id);
+      presetEl.value = cfg.presetKey;
+
+      // init slider based on saved speed byte (0..35)
+      setPresetSliderDefault(speedEl, clamp(cfg.speed ?? 10, 0, 35));
+      speedHexEl.textContent = speedToHex(presetSliderToSpeed(speedEl.value));
+
+      function saveFromUi() {
+        const c = loadReactionConfig(r.id);
+        c.enabled = !!enabledEl.checked;
+        c.presetKey = presetEl.value;
+        c.speed = presetSliderToSpeed(speedEl.value); // store byte 35..0
+        if (colAEl) c.colorA = colAEl.value;
+        if (colBEl) c.colorB = colBEl.value;
+        if (colCEl) c.colorC = colCEl.value;
+        saveReactionConfig(r.id, c);
+      }
+
+      function refreshHint() {
+        const c = loadReactionConfig(r.id);
+        const preset = getPresetByKey(c.presetKey);
+        hintEl.textContent = `${preset.name} — ${preset.tag || ""}`.trim();
+      }
+      refreshHint();
+
+      enabledEl.addEventListener("change", () => { saveFromUi(); });
+      presetEl.addEventListener("change", () => { saveFromUi(); renderLedTab(); });
+      speedEl.addEventListener("input", () => { speedHexEl.textContent = speedToHex(presetSliderToSpeed(speedEl.value)); saveFromUi(); });
+      colAEl?.addEventListener("input", saveFromUi);
+      colBEl?.addEventListener("input", saveFromUi);
+      colCEl?.addEventListener("input", saveFromUi);
+
+      testEl.addEventListener("click", async () => {
+        saveFromUi();
+        await dispatchLed(r.id, "test");
+      });
+    }
+  }
+
+
+  function renderAllSettingsTabs() {
+    renderControlTab();
+    renderLedTab();
+    renderBoardTab();
+    renderLogsTab();
+  }
+
+  renderAllSettingsTabs();
+
+  /********************************************************************
+   * Click injection (Keyboard)
+   ********************************************************************/
+  async function clickMiss() {
+    const btn = findBtnByExactTextAny(["Miss"]);
+    if (isClickableButton(btn)) btn.click();
+  }
+  async function click25() {
+    const btn = findBtnByExactTextAny(["25"]);
+    if (isClickableButton(btn)) btn.click();
+  }
+
+  async function clickBull50OrFallback() {
+    const bullBtn = findBtnByExactTextAny(["Bull"]);
+    if (isClickableButton(bullBtn)) { bullBtn.click(); return true; }
+
+    // fallback: Double + 25
+    const dbl = findBtnByExactTextAny(["Double"]);
+    if (isClickableButton(dbl)) {
+      dbl.click();
+      await sleep(200);
+      await click25();
+      return true;
+    }
+    return false;
+  }
+
+  async function clickWithModifier(kind, n) {
+    const modLabel = (kind === "D") ? "Double" : "Triple";
+    const modBtn = findBtnByExactTextAny([modLabel]);
+    if (!isClickableButton(modBtn)) return false;
+
+    modBtn.click();
+    await sleep(200);
+
+    const btn = findBtnByExactTextAny([kind + n]);
+    if (isClickableButton(btn)) { btn.click(); return true; }
+    return false;
+  }
+
+  function isAllowedForAction(allowed, action) {
+    if (!action) return false;
+    if (allowed.has(action)) return true;
+
+    if (/^D\d{1,2}$/.test(action) && allowed.has("DOUBLE_MOD")) return true;
+    if (/^T\d{1,2}$/.test(action) && allowed.has("TRIPLE_MOD")) return true;
+
+    if (action === "BULL" && allowed.has("DOUBLE_MOD") && allowed.has("25")) return true;
+    return false;
+  }
+
+  async function clickAction(action) {
+    if (action === "NEXT") {
+      const btn = findNextButton();
+      if (isClickableButton(btn)) btn.click();
+      return true;
+    }
+    if (action === "MISS") { await clickMiss(); return true; }
+    if (action === "25") { await click25(); return true; }
+    if (action === "BULL") { return await clickBull50OrFallback(); }
+
+    const direct = findBtnByExactTextAny([action]);
+    if (isClickableButton(direct)) { direct.click(); return true; }
+
+    const m = action.match(/^([DT])(\d{1,2})$/);
+    if (m) return await clickWithModifier(m[1], m[2]);
+
+    return false;
+  }
+
+  /********************************************************************
+   * Mode resolve + injection pipeline (AutoView included)
    ********************************************************************/
   function resolveMode(allowed) {
-    if (SETTINGS.inputMode === "keyboard") return "keyboard";
-    if (SETTINGS.inputMode === "board") return "board";
-    return shouldUseBoardFallbackInAuto(allowed) ? "board" : "keyboard";
+    if (STATE.inputMode === "keyboard") return "keyboard";
+    if (STATE.inputMode === "board") return "board";
+    // auto:
+    return allowedHasAnyNumbers(allowed) ? "keyboard" : "board";
   }
 
   let lastInjectAt = 0;
+
+  function setModeLabel(mode) {
+    ui.mode.textContent = (mode === "board") ? "Boardview" : "Keyboardview";
+  }
+
+  function resetDartCounter(reason) {
+    STATE.dartCount = 0;
+    ui.logAdv("DartCounter reset (" + reason + ")");
+  }
+
+  function incDartCounter() {
+    STATE.dartCount = clamp(STATE.dartCount + 1, 0, 99);
+  }
 
   async function injectTarget(target, sourceLabel) {
     const now = Date.now();
     if (now - lastInjectAt < CONFIG.minMsBetweenThrows) return;
     lastInjectAt = now;
 
-    const allowed = getAllowedActions(); // runtime updates
+    const allowed = getAllowedActions();
     const mode = resolveMode(allowed);
+    setModeLabel(mode);
 
-    ui.mode.textContent = formatModeLabel(mode);
     ui.raw.textContent = sourceLabel || "BLE";
 
-    // BTN@ is from GranBoard -> NEXT
+    // special: Next button
     if (target && target.__specialNext) {
       ui.action.textContent = "NEXT";
-      await clickAction("NEXT"); // will also flash LED (if enabled)
+      const ok = await clickAction("NEXT");
+      if (ok) {
+        resetDartCounter("NEXT");
+        await dispatchLed("next", "next", target);
+      }
       return;
     }
 
+    // ignore miss after 3 darts (your request)
+    if (target.ring === "OUT" && STATE.dartCount >= 3) {
+      ui.logAdv("MISS ignored (dartCount >= 3)");
+      return;
+    }
+
+    // always count darts for hit/bull/miss once processed (not for ignored)
+    incDartCounter();
+
+    // LED hit dispatch (before UI click, but same outcome for preview)
+    if (target.ring === "SBULL") await dispatchLed("bull_single", "hit", target);
+    else if (target.ring === "DBULL") await dispatchLed("bull_double", "hit", target);
+    else if (target.ring === "OUT") await dispatchLed("miss", "hit", target);
+    else if (target.ring === "D") await dispatchLed("hit_double", "hit", target);
+    else if (target.ring === "T") await dispatchLed("hit_triple", "hit", target);
+    else await dispatchLed("hit_single", "hit", target);
+
     const kbAction = targetToKeyboardAction(target);
-    const boardKind = BOARD.targetToBoardKind(target);
-    ui.action.textContent = kbAction || (boardKind ? (boardKind.kind + (boardKind.n ? boardKind.n : "")) : "—");
+    ui.action.textContent = kbAction || "—";
 
     if (mode === "keyboard") {
+      // AutoView: ensure keyboard
+      await ensureKeyboardView(ui.logAdv).catch(() => {});
       const hasNumbers = allowedHasAnyNumbers(allowed);
 
+      // Box27: no keypad numbers -> switch to board and fire there
+      if (!hasNumbers) {
+        ui.logAdv("AutoView: no keypad numbers -> switch to Board view");
+        await ensureBoardView(ui.logAdv).catch(() => {});
+        await sleep(CONFIG.uiSwitchWaitMs);
+
+        const bk = BOARD.targetToBoardKind(target);
+        if (bk) {
+          try { await BOARD.fire(bk.kind, bk.n || 0); } catch (e) { ui.logAdv("Board fire error: " + (e?.message || e)); }
+        }
+        return;
+      }
+
       if (!isAllowedForAction(allowed, kbAction)) {
-        ui.log(`Not allowed on keypad: ${kbAction} -> MISS`);
+        ui.logAdv("Not allowed on keypad: " + kbAction + " -> MISS");
         await clickAction("MISS");
         return;
       }
 
       const ok = await clickAction(kbAction);
-      if (ok) return;
-
-      ui.log(`Keyboard click failed: ${kbAction} -> ${hasNumbers ? "MISS" : "board fallback"}`);
-      if (hasNumbers) {
+      if (!ok) {
+        ui.logAdv("Keyboard click failed: " + kbAction + " -> MISS");
         await clickAction("MISS");
-        return;
       }
-      // else fall through to board as last resort
-    }
-
-    // Board mode: try to flip Autodarts into board/scheibe if needed
-    if (SETTINGS.inputMode === "auto" && shouldUseBoardFallbackInAuto(allowed)) {
-      await ensureAutodartsBoardInputModeEnabled();
-    }
-
-    const bk = BOARD.targetToBoardKind(target);
-    if (!bk) {
-      ui.log("Board: unknown target -> MISS");
-      try { await BOARD.fire("MISS", 0); } catch (e) { ui.log("Board MISS error: " + (e?.message || e)); }
       return;
     }
 
+    // mode === board
+    await ensureBoardView(ui.logAdv).catch(() => {});
+    const bk = BOARD.targetToBoardKind(target);
+    if (!bk) {
+      ui.logAdv("Board: unknown -> MISS");
+      try { await BOARD.fire("MISS", 0); } catch {}
+      return;
+    }
     try {
-      const res = await BOARD.fire(bk.kind, bk.n || 0);
-      if (SETTINGS.debug) ui.log(`Board fire ${bk.kind}${bk.n ? bk.n : ""} client(${res.client.cx.toFixed(1)},${res.client.cy.toFixed(1)})`);
+      await BOARD.fire(bk.kind, bk.n || 0);
     } catch (e) {
-      ui.log("Board fire error: " + (e?.message || e));
+      ui.logAdv("Board fire error: " + (e?.message || e));
       await clickAction("MISS");
     }
   }
@@ -859,41 +1760,58 @@
   /********************************************************************
    * BLE notify handler
    ********************************************************************/
-  async function handleRawFrame(raw) {
-    let cleaned = String(raw || "").trim();
-
-    const idx = cleaned.indexOf(CONFIG.CONNECT_PREFIX);
-    if (idx !== -1) {
-      const before = cleaned;
-      cleaned = cleaned.slice(idx + CONFIG.CONNECT_PREFIX.length);
-      if (!cleaned) return;
-      if (!cleaned.endsWith("@") && raw.endsWith("@")) cleaned += "@";
-      ui.log(`Prefix stripped: "${before}" -> "${cleaned}"`);
-    }
-
-    ui.raw.textContent = cleaned;
-
-    if (cleaned === "BTN@") {
-      await injectTarget({ __specialNext: true }, "BLE");
-      return;
-    }
-
-    const target = RAW_TO_TARGET.get(cleaned);
-    if (!target) {
-      ui.log('Unknown RAW "' + cleaned + '"');
-      ui.action.textContent = "—";
-      return;
-    }
-
-    await injectTarget(target, "BLE");
-  }
-
   function onNotify(event) {
     const u8 = new Uint8Array(event.target.value.buffer);
     appendToBuffer(u8);
+
+    // Advanced: show notify chunks
+    ui.logAdv("RX (notify chunk) HEX=" + u8ToHex(u8) + " ASCII=" + bytesToAsciiVisible(u8));
+
     for (const f of extractFrames()) {
       const raw = bytesToAsciiVisible(f);
-      handleRawFrame(raw).catch(e => ui.log("handleRawFrame error: " + (e?.message || e)));
+      // Basic: show frames with timestamp
+      ui.logBasic("RX " + raw + "  (HEX " + u8ToHex(f) + ")");
+
+      (async () => {
+        let cleaned = String(raw || "").trim();
+
+        // strip prefix if it exists
+        const idx = cleaned.indexOf(CONFIG.CONNECT_PREFIX);
+        if (idx !== -1) {
+          const before = cleaned;
+          cleaned = cleaned.slice(idx + CONFIG.CONNECT_PREFIX.length);
+          if (!cleaned) return;
+          if (!cleaned.endsWith("@") && raw.endsWith("@")) cleaned += "@";
+          ui.logAdv(`Prefix stripped: "${before}" -> "${cleaned}"`);
+        }
+
+        ui.raw.textContent = cleaned;
+
+        // Board confirm: "write OK"
+        if (cleaned.toUpperCase().includes("WRITE OK")) {
+          // only use this for slider settings visually (we keep single store, UI shows it on sliders)
+          STATE.lastBoardConfirm = ts() + " · write OK";
+          ui.logBasic("Board confirm: write OK");
+          // refresh board tab if open (to update confirm text)
+          if (STATE.settingsOpen) renderBoardTab();
+          return;
+        }
+
+        // Next button on board
+        if (cleaned === "BTN@") {
+          await injectTarget({ __specialNext: true }, "BLE");
+          return;
+        }
+
+        const target = RAW_TO_TARGET.get(cleaned);
+        if (!target) {
+          ui.logAdv('Unknown RAW "' + cleaned + '"');
+          ui.action.textContent = "—";
+          return;
+        }
+
+        await injectTarget(target, "BLE");
+      })().catch(e => ui.logAdv("handleRawFrame error: " + (e?.message || e)));
     }
   }
 
@@ -902,15 +1820,15 @@
    ********************************************************************/
   async function connectGranBoard() {
     if (!navigator.bluetooth) {
-      ui.log("WebBluetooth not available.");
-      setConnectedState(false);
+      ui.logAdv("WebBluetooth not available.");
       return;
     }
-    if (connected) return;
+    if (STATE.connected) return;
 
-    ui.log("Connect…");
+    ui.logBasic("Connect… (opening BLE pairing)");
 
     try {
+      // request device (prefer namePrefix)
       try {
         device = await navigator.bluetooth.requestDevice({
           filters: [{ namePrefix: CONFIG.namePrefix }],
@@ -925,45 +1843,50 @@
 
       ui.device.textContent = device.name || "(no name)";
       saveLastDeviceName(device.name || "");
-      setConnectedState(false);
 
       device.addEventListener("gattserverdisconnected", () => {
-        ui.log("BLE disconnected.");
+        ui.logBasic("BLE disconnected.");
         server = null;
         notifyChar = null;
-        ledChar = null;
-        setConnectedState(false);
+        writeChar = null;
+        STATE.connected = false;
+        paintStatus();
+        renderLedTab();
       }, { once: true });
 
       server = await device.gatt.connect();
-
       const service = await server.getPrimaryService(CONFIG.VENDOR_SERVICE);
       const chars = await service.getCharacteristics();
 
-      // Notify/Indicate stream
       const notifyCandidates = chars.filter(c => c.properties.notify || c.properties.indicate);
-      if (!notifyCandidates.length) {
-        ui.log("No notify/indicate characteristic found.");
-        setConnectedState(false);
-        return;
-      }
+      if (!notifyCandidates.length) throw new Error("No notify characteristic found.");
       notifyChar = notifyCandidates.find(c => c.properties.notify) || notifyCandidates[0];
-      ui.log("Using notify characteristic: " + notifyChar.uuid);
 
-      // LED write characteristic (best effort)
       const writeCandidates = chars.filter(c => c.properties.write || c.properties.writeWithoutResponse);
-      ledChar = writeCandidates.find(c => c.uuid !== notifyChar.uuid) || writeCandidates[0] || null;
-      ui.log("Using LED characteristic: " + (ledChar ? ledChar.uuid : "none"));
+      writeChar = writeCandidates.find(c => c.uuid !== notifyChar.uuid) || writeCandidates[0] || null;
 
       streamBuffer = new Uint8Array(0);
+
       await notifyChar.startNotifications();
       notifyChar.addEventListener("characteristicvaluechanged", onNotify);
 
-      setConnectedState(true);
-      ui.log("Connected.");
+      STATE.connected = true;
+      paintStatus();
+      ui.logBasic("Connected.");
+
+      // AutoView: ensure keyboard after connect
+      await ensureKeyboardView(ui.logAdv).catch(()=>{});
+
+      // LED connect effect
+      await dispatchLed("connect", "connect");
+
+      // Re-render LED tab to enable Test buttons
+      renderLedTab();
     } catch (e) {
-      ui.log("Connect error: " + (e?.message || e));
-      setConnectedState(false);
+      ui.logBasic("Connect error: " + (e?.message || e));
+      STATE.connected = false;
+      paintStatus();
+      renderLedTab();
     }
   }
 
@@ -977,7 +1900,7 @@
     } finally {
       server = null;
       notifyChar = null;
-      ledChar = null;
+      writeChar = null;
       device = null;
       streamBuffer = new Uint8Array(0);
 
@@ -985,55 +1908,40 @@
       ui.raw.textContent = "—";
       ui.action.textContent = "—";
       ui.mode.textContent = "—";
-      setConnectedState(false);
-      ui.log("Disconnected.");
+
+      STATE.connected = false;
+      paintStatus();
+      renderLedTab();
+      ui.logBasic("Disconnected.");
     }
   }
 
-  ui.connectToggleBtn.addEventListener("click", () => {
-    if (connected) disconnectGranBoard();
+  ui.connectBtn.addEventListener("click", () => {
+    if (STATE.connected) disconnectGranBoard();
     else connectGranBoard();
   });
 
-  setConnectedState(false);
-
   /********************************************************************
-   * SPA persistence (re-attach overlay)
+   * SPA persistence (Autodarts navigation)
    ********************************************************************/
   function ensureUIAttached() {
-    if (!document.getElementById("__gb_ad_overlay__") || !document.getElementById("__gb_ad_tab__")) {
+    if (!document.getElementById("__gb_overlay__") || !document.getElementById("__gb_tab__")) {
       ui = createUI();
-      setOverlayVisible(SETTINGS.overlay);
-      applyDebugUI();
-      applyLedUI();
-      applyInputModeUI();
-      setTabBorder();
+      setOverlayVisible(STATE.overlayVisible);
       paintStatus();
+      renderAllSettingsTabs();
 
-      ui.hideBtn.addEventListener("click", () => setOverlayVisible(false));
+      ui.btnHide.addEventListener("click", () => setOverlayVisible(false));
       ui.tab.addEventListener("click", () => setOverlayVisible(true));
-
-      ui.debugToggle.addEventListener("change", () => {
-        SETTINGS.debug = !!ui.debugToggle.checked;
-        saveBool(STORAGE.DEBUG, SETTINGS.debug);
-        applyDebugUI();
-      });
-
-      ui.ledToggle.addEventListener("change", () => {
-        SETTINGS.ledNext = !!ui.ledToggle.checked;
-        saveBool(STORAGE.LED_NEXT, SETTINGS.ledNext);
-      });
-
-      ui.inputSelect.addEventListener("change", () => {
-        SETTINGS.inputMode = ui.inputSelect.value || "auto";
-        saveStr(STORAGE.INPUT_MODE, SETTINGS.inputMode);
-        applyInputModeUI();
-      });
-
-      ui.connectToggleBtn.addEventListener("click", () => {
-        if (connected) disconnectGranBoard();
+      ui.btnSettings.addEventListener("click", () => setSettingsOpen(!STATE.settingsOpen));
+ui.connectBtn.addEventListener("click", () => {
+        if (STATE.connected) disconnectGranBoard();
         else connectGranBoard();
       });
+
+      ui.tabButtons.forEach(btn => btn.addEventListener("click", () => activateSettingsTab(btn.getAttribute("data-tab"))));
+
+      setTimeout(updateGbTabPosition, 80);
     }
   }
 
@@ -1058,4 +1966,5 @@
 
   new MutationObserver(() => ensureUIAttached()).observe(document.documentElement, { childList: true, subtree: true });
   setInterval(ensureUIAttached, 1200);
+
 })();

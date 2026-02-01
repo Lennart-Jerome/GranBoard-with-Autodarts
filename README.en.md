@@ -75,6 +75,13 @@ To ensure proper operation, **userscripts must be allowed**:
 ### 1️⃣ Install Tampermonkey
 - https://www.tampermonkey.net/
 
+Einstellung von Tampermonkey erweiterung
+![Settings ](images/tampermonkey-setting.png)
+
+
+
+![Settings](images/tampermonkey-setting-2.png)
+
 ### 2️⃣ Install the userscript
 👉 Open this link (Tampermonkey will detect it automatically):
 

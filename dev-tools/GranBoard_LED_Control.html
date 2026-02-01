@@ -738,23 +738,18 @@
       }
     },
     {
-  key:"op19",
-  name:"Hunt Flicker",
-  tag:"OP19 · 1 color · speed",
-  colors:1,
-  defaultSpeed:10,
-  build:(speed, a)=>{
-    const u8 = frame16(0x19);
-    u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
-
-    // wichtig: Pattern/Mode Bytes wie bei vielen Sniffer-Frames
-    u8[11]=0x02;
-    u8[12]=speed;
-    u8[13]=0x02;
-
-    return u8;
-  }
-},
+      key:"op19",
+      name:"Hunt Flicker",
+      tag:"OP19 · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x19);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
     {
       key:"op1b",
       name:"Shake",
@@ -781,30 +776,43 @@
         return u8;
       }
     },
-
     {
-    key:"op11_next",
-    name:"Next (2-Segment)",
-    tag:"OP11 · 2 colors · speed",
-    colors:2,
-    defaultSpeed:0x05,
-    build:(speed, a, b)=>{
-      const u8 = frame16(0x11);
+      key:"op11",
+      name:"Next (2-Segment)",
+      tag:"OP11 · 2 colors · speed (ColorB evtl. Accent/Helligkeit)",
+      colors:2,
+      defaultSpeed:20,
+      build:(speed, a, b)=>{
+        const u8 = frame16(0x11);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
 
-      // Color A (wie Sniffer)
-      u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        // ColorB (wie in euren Frames)
+        u8[6]=b.r; u8[7]=b.g; u8[8]=b.b;
 
-      // Color B (WICHTIG: genau hier!)
-      u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+        u8[10]=0x10; u8[11]=0x00;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op1f",
+      name:"Bull Multicolor Fade",
+      tag:"OP1F · 3 colors · speed",
+      colors:3,
+      defaultSpeed:20,
+      build:(speed, a, b, c)=>{
+        const u8 = frame16(0x1F);
+        // A/B/C Slots
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+        u8[7]=c.r; u8[8]=c.g; u8[9]=c.b;
 
-      // Rest wie Sniffer-Frame
-      u8[10]=0x10;      // mode / konstant
-      u8[12]=speed;     // speed
-      // u8[15]=0x01 setzt frame16() ohnehin
-
-      return u8;
-  }
-},
+        u8[10]=0x02; u8[11]=0x00;
+        u8[12]=speed;
+        u8[13]=0x02;
+        return u8;
+      }
+    },
   ];
 
   function labelWrap(lbl, el){

@@ -75,6 +75,15 @@ Damit das Script funktioniert, müssen **Userscripts erlaubt sein**:
 ### 1️⃣ Tampermonkey installieren
 - https://www.tampermonkey.net/
 
+Einstellung von Tampermonkey erweiterung
+![Erweitung verwalten](images/tampermonkey-setting.png)
+
+
+
+![Einstellung setzten und aktualiseren](images/tampermonkey-setting-2.png)
+
+---
+
 ### 2️⃣ Userscript installieren
 👉 Öffne diesen Link (Tampermonkey erkennt das automatisch):
 https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
