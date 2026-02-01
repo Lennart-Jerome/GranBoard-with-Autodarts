@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GranBoard – LED Controller</title>
+  <style>
+    :root{
+      --bg:#0b0d10; --panel:#12161c; --panel2:#0f141a;
+      --text:#e8eef7; --muted:#9aa7b8; --stroke:#243041;
+      --ok:#3bd16f; --bad:#ff5a5a; --accent:#4aa3ff;
+      --shadow: 0 10px 30px rgba(0,0,0,.25);
+      --radius:14px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--text)}
+    .wrap{
+      display:grid;
+      grid-template-columns: 400px minmax(520px,1fr) 300px; /* left / center / log */
+      gap:12px;
+      padding:12px;
+      align-items:start;
+    }
+    @media (max-width: 1280px){
+      .wrap{grid-template-columns: 400px 1fr;}
+      .logCol{grid-column: 1 / -1;}
+    }
+
+    .card{
+      background:var(--panel);
+      border:1px solid var(--stroke);
+      border-radius:var(--radius);
+      padding:12px;
+      box-shadow:var(--shadow);
+      overflow:hidden; /* wichtig: nix darf in andere Spalten ragen */
+      min-width:0;
+    }
+    h1{font-size:16px;margin:0 0 10px}
+    h2{font-size:13px;margin:14px 0 8px;color:var(--muted);font-weight:800}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .row2{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .small{font-size:12px;color:var(--muted);line-height:1.35}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+
+    button, select, input[type="text"], input[type="number"]{
+      padding:9px 10px;border-radius:12px;border:1px solid var(--stroke);
+      background:var(--panel2);color:var(--text);font: 13px system-ui;outline:none;
+    }
+    button{cursor:pointer}
+    button:hover{border-color:#33506f}
+    button:disabled{opacity:.5;cursor:not-allowed}
+
+    input[type="color"]{
+      width:42px;height:36px;padding:0;border-radius:12px;border:1px solid var(--stroke);
+      background:var(--panel2);
+    }
+    input[type="range"]{width:100%}
+
+    .pill{display:inline-flex;align-items:center;gap:8px;padding:7px 10px;border-radius:999px;border:1px solid var(--stroke);background:var(--panel2);font-size:12px;color:var(--muted)}
+    .dot{width:8px;height:8px;border-radius:50%;background:#555}
+    .dot.ok{background:var(--ok)}
+    .dot.bad{background:var(--bad)}
+
+    .grid2{display:grid;grid-template-columns: 1fr 1fr;gap:10px}
+    @media (max-width: 980px){ .grid2{grid-template-columns:1fr;} }
+
+    .presetCard{
+      border:1px solid var(--stroke);
+      border-radius:14px;
+      padding:10px;
+      background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,0));
+    }
+    .presetTop{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+    .presetTitle{font-weight:800;font-size:13px}
+    .tag{font-size:11px;color:var(--muted)}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:8px}
+    .sliderRow{display:grid;grid-template-columns: 1fr 70px;gap:10px;align-items:center;width:100%;margin-top:8px}
+    .sliderPill{
+      text-align:center;font-size:11px;color:var(--muted);
+      border:1px solid var(--stroke);background:var(--panel2);
+      border-radius:999px;padding:6px 8px;
+    }
+    label{display:flex;flex-direction:column;gap:6px}
+    .hint{font-size:11px;color:var(--muted);margin-top:6px}
+
+    /* Ring Grid (kompakt, 5 Spalten => 20 Elemente) */
+    .ringGrid{
+      display:grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap:8px;
+      margin-top:10px;
+    }
+    .segBox{
+      border:1px solid var(--stroke);
+      background:var(--panel2);
+      border-radius:12px;
+      padding:8px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      min-height:64px;
+      min-width:0;
+    }
+    .segHdr{
+      display:flex;justify-content:space-between;align-items:center;
+      font-size:11px;color:var(--muted);line-height:1;
+    }
+    .segHdr strong{color:var(--text);font-weight:800;font-size:11px}
+    .segBox.selected{
+      outline:2px solid rgba(74,163,255,.5);
+      border-color:#2c5b86;
+    }
+    .segBox select{
+      padding:6px 8px;
+      border-radius:10px;
+      font-size:12px;
+      height:32px;
+    }
+
+    /* Log */
+    pre{
+      margin:10px 0 0;padding:10px;background:var(--panel2);
+      border:1px solid var(--stroke);
+      border-radius:14px;overflow:auto;max-height: calc(100vh - 160px);
+      color:#d7e3f7;white-space:pre-wrap;font-size:12px;
+    }
+    .logTop{display:flex;justify-content:space-between;align-items:center;gap:10px}
+    .hr{height:1px;background:var(--stroke);margin:12px 0}
+    .hexRow{display:flex;gap:10px;align-items:center;margin-top:10px}
+    .hexRow input{flex:1;min-width:0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- LEFT -->
+    <div class="card">
+      <h1>GranBoard – LED Controller</h1>
+
+      <div class="row">
+        <div class="row2">
+          <span class="pill"><span id="dot" class="dot bad"></span><span id="status">Disconnected</span></span>
+        </div>
+        <div class="row2">
+          <button id="btnConnect">Connect</button>
+          <button id="btnDisconnect" disabled>Disconnect</button>
+        </div>
+      </div>
+
+      <div class="small" style="margin-top:10px;">
+        Service: <span class="mono">442F1570-8A00-9A28-CBE1-E1D4212D53EB</span><br/>
+        Notify: <span class="mono">442F1571-…</span> (RX) · Write: <span class="mono">442F1572-…</span> (TX)
+      </div>
+
+      <h2>Info</h2>
+      <div class="small">
+        Device: <span id="devName" class="mono">—</span><br/>
+        Notify Char: <span id="notifyUuid" class="mono">—</span><br/>
+        Write Char: <span id="writeUuid" class="mono">—</span><br/>
+        Properties: <span id="props" class="mono">—</span>
+      </div>
+
+      <h2>Statischer Ring (20 Segmente)</h2>
+      <div class="small">
+        20-Byte Palette (Code <span class="mono">00–07</span>) – kein RGB.<br/>
+        00 OFF · 01 Rot · 02 Orange · 03 Gelb · 04 Hellgrün · 05 Türkis · 06 Lila · 07 Weiß
+      </div>
+
+      <div class="controls" style="margin-top:10px;">
+        <label style="min-width:210px;">
+          <span class="small">Palette (00–07)</span>
+          <select id="ringPalette"></select>
+        </label>
+        <button id="btnApplySelected">Apply to Selected</button>
+        <button id="btnFillAll">Apply to All</button>
+        <button id="btnRingOff">Ring OFF</button>
+      </div>
+
+      <div class="small" style="margin-top:6px;">
+        Tipp: Klick selektiert Segment · Shift+Klick = Multi-Select
+      </div>
+
+      <div id="ringGrid" class="ringGrid"></div>
+
+      <div class="controls" style="margin-top:10px;">
+        <button id="btnSendRing">Send Ring</button>
+        <button id="btnCopyRing">Copy Hex</button>
+      </div>
+      <div class="small mono" id="ringSummary" style="margin-top:6px;"></div>
+
+      <div class="hr"></div>
+
+      <h2>Target Hit Effekt (Single / Double / Triple)</h2>
+      <div class="small">Target-ID + Color A/B + Speed (00..FF).</div>
+
+      <div class="controls" style="margin-top:10px;">
+        <label style="min-width:120px;">
+          <span class="small">Segment</span>
+          <select id="hitSeg"></select>
+        </label>
+
+        <label style="min-width:120px;">
+          <span class="small">Hit Type</span>
+          <select id="hitType">
+            <option value="01">Single</option>
+            <option value="02">Double</option>
+            <option value="03">Triple</option>
+          </select>
+        </label>
+
+        <label>
+          <span class="small">Color A</span>
+          <input id="hitC1" type="color" value="#00ff00" />
+        </label>
+
+        <label>
+          <span class="small">Color B</span>
+          <input id="hitC2" type="color" value="#0000ff" />
+        </label>
+      </div>
+
+      <div class="sliderRow">
+        <input id="hitSpeed" type="range" min="0" max="255" value="20"/>
+        <div class="sliderPill"><span id="hitSpeedHex" class="mono">0x14</span></div>
+      </div>
+      <div class="hint">Hit-Speed: links langsam (<span class="mono">0x00</span>) → rechts schnell (<span class="mono">0xFF</span>)</div>
+
+      <div class="controls" style="margin-top:10px;">
+        <button id="btnSendHit">Send</button>
+        <button id="btnCopyHit">Copy Hex</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <h2>Manuell senden</h2>
+      <div class="hexRow">
+        <input id="hexline" class="mono" type="text"
+               placeholder="z.B. 18 FF 00 00 00 00 00 00 00 00 00 00 14 00 00 01" />
+        <button id="btnSendHex">Send</button>
+      </div>
+      <div class="hint">
+        Hex mit Leerzeichen/Komma/0x. Kommentare nach <span class="mono">;</span> oder <span class="mono">#</span> werden ignoriert.
+      </div>
+    </div>
+
+    <!-- CENTER -->
+    <div class="card">
+      <div class="row">
+        <div>
+          <h1 style="margin:0;">Presets</h1>
+          <div class="small">2 Spalten, wenig Scroll. Speed pro Preset: <b>35 (langsam)</b> → <b>0 (schnell)</b>.</div>
+        </div>
+        <div class="row2">
+          <span class="pill">TX: <span id="txCount" class="mono">0</span></span>
+          <span class="pill">RX: <span id="rxCount" class="mono">0</span></span>
+        </div>
+      </div>
+
+      <div class="grid2" id="presetGrid" style="margin-top:12px;"></div>
+    </div>
+
+    <!-- RIGHT LOG -->
+    <div class="card logCol">
+      <div class="logTop">
+        <div class="row2">
+          <button id="btnClear">Clear</button>
+          <button id="btnCopyLog">Copy</button>
+        </div>
+        <div class="small mono">Log</div>
+      </div>
+      <pre id="log"></pre>
+    </div>
+
+  </div>
+
+<script>
+  // ===== UUIDs =====
+  const SVC_UUID  = "442f1570-8a00-9a28-cbe1-e1d4212d53eb";
+  const CH_NOTIFY = "442f1571-8a00-9a28-cbe1-e1d4212d53eb";
+  const CH_WRITE  = "442f1572-8a00-9a28-cbe1-e1d4212d53eb";
+
+  let device=null, server=null, svc=null, chN=null, chW=null;
+  let rx=0, tx=0;
+
+  const $ = (id)=>document.getElementById(id);
+
+  // ===== helpers =====
+  function setStatus(ok, text){
+    $("dot").className = "dot " + (ok ? "ok":"bad");
+    $("status").textContent = text;
+    $("btnConnect").disabled = ok;
+    $("btnDisconnect").disabled = !ok;
+  }
+  function log(line){
+    const el = $("log");
+    el.textContent += line + "\n";
+    el.scrollTop = el.scrollHeight;
+  }
+  function bytesToHex(u8){
+    return [...u8].map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ");
+  }
+  function parseHexLine(line){
+    if(!line) return null;
+    line = line.split(";")[0].split("#")[0].trim();
+    if(!line) return null;
+    line = line.replace(/0x/gi,"").replace(/,/g," ").trim();
+    const parts = line.split(/\s+/).filter(Boolean);
+    if(!parts.length) return null;
+    const bytes=[];
+    for(const p of parts){
+      if(!/^[0-9a-fA-F]{1,2}$/.test(p)) return {error:"Invalid token: "+p};
+      bytes.push(parseInt(p,16)&0xFF);
+    }
+    return new Uint8Array(bytes);
+  }
+  function hexToRgb(hex){
+    const m=/^#?([0-9a-f]{6})$/i.exec(hex||"");
+    if(!m) return {r:0,g:0,b:0};
+    const v=parseInt(m[1],16);
+    return {r:(v>>16)&255,g:(v>>8)&255,b:v&255};
+  }
+  async function copyText(txt){
+    try{ await navigator.clipboard.writeText(txt); log("📋 Copied to clipboard."); }
+    catch(e){ log("⚠️ Clipboard failed: "+String(e)); }
+  }
+  function speedToHex(n){ return "0x"+(n&0xFF).toString(16).padStart(2,"0").toUpperCase(); }
+
+  // Preset-Speed: 35 (slow) .. 0 (fast)  -> Slider left slow, right fast
+  function presetSliderToSpeed(v0_100){
+    const t = Math.min(100, Math.max(0, Number(v0_100))) / 100;
+    const slow = 35, fast = 0;
+    return Math.round(slow + (fast - slow) * t); // 35..0
+  }
+  function setPresetSliderDefault(sliderEl, defaultByte){
+    // defaultByte clamped 0..35
+    defaultByte = Math.max(0, Math.min(35, defaultByte|0));
+    let best=0, bestDiff=999;
+    for(let i=0;i<=100;i++){
+      const s=presetSliderToSpeed(i);
+      const d=Math.abs(s-defaultByte);
+      if(d<bestDiff){bestDiff=d;best=i;}
+    }
+    sliderEl.value = String(best);
+  }
+
+  async function writeBytes(u8, label="TX"){
+    if(!chW) throw new Error("Write characteristic not ready.");
+    const props = chW.properties || {};
+    const canWnr = !!props.writeWithoutResponse;
+
+    if(canWnr && chW.writeValueWithoutResponse) await chW.writeValueWithoutResponse(u8);
+    else await chW.writeValue(u8);
+
+    tx++; $("txCount").textContent = String(tx);
+    log(`➡️ ${label}: ${bytesToHex(u8)}`);
+  }
+
+  function onNotify(ev){
+    const u8 = new Uint8Array(ev.target.value.buffer);
+    rx++; $("rxCount").textContent = String(rx);
+    log(`⬅️ RX: ${bytesToHex(u8)}`);
+  }
+
+  // ===== BLE =====
+  async function connect(){
+    try{
+      if(!navigator.bluetooth){
+        alert("Web Bluetooth nicht verfügbar. Nutze Chrome/Edge (Desktop).");
+        return;
+      }
+      setStatus(false,"Connecting…");
+      log("🔍 Opening BLE chooser…");
+
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices:true,
+        optionalServices:[SVC_UUID]
+      });
+
+      $("devName").textContent = device.name || "(no name)";
+      log(`✅ Selected: ${device.name || "(no name)"} | id=${device.id}`);
+
+      device.addEventListener("gattserverdisconnected", ()=>{
+        log("⚠️ Disconnected");
+        cleanup();
+      });
+
+      server = await device.gatt.connect();
+      svc = await server.getPrimaryService(SVC_UUID);
+
+      chN = await svc.getCharacteristic(CH_NOTIFY);
+      chW = await svc.getCharacteristic(CH_WRITE);
+
+      $("notifyUuid").textContent = chN.uuid;
+      $("writeUuid").textContent  = chW.uuid;
+
+      const props=[];
+      if(chN.properties.notify) props.push("notify");
+      if(chW.properties.write) props.push("write");
+      if(chW.properties.writeWithoutResponse) props.push("writeWithoutResponse");
+      $("props").textContent = props.join(", ") || "—";
+
+      await chN.startNotifications();
+      chN.addEventListener("characteristicvaluechanged", onNotify);
+
+      setStatus(true,"Connected");
+      log("✅ Ready. RX enabled, TX enabled.");
+    }catch(e){
+      log("❌ Connect error: "+String(e));
+      cleanup();
+    }
+  }
+
+  async function disconnect(){
+    try{
+      if(chN){
+        try{ chN.removeEventListener("characteristicvaluechanged", onNotify);}catch{}
+        try{ await chN.stopNotifications(); }catch{}
+      }
+      if(device?.gatt?.connected) device.gatt.disconnect();
+    }finally{
+      cleanup();
+      log("🔌 Disconnect requested.");
+    }
+  }
+
+  function cleanup(){
+    chN=null; chW=null; svc=null; server=null;
+    $("notifyUuid").textContent="—";
+    $("writeUuid").textContent="—";
+    $("props").textContent="—";
+    setStatus(false,"Disconnected");
+  }
+
+  $("btnConnect").onclick = connect;
+  $("btnDisconnect").onclick = disconnect;
+
+  // ===== Ring palette (00-07) =====
+  const PALETTE = [
+    {code:0x00, name:"00 OFF"},
+    {code:0x01, name:"01 ROT"},
+    {code:0x02, name:"02 ORANGE"},
+    {code:0x03, name:"03 GELB"},
+    {code:0x04, name:"04 HELLGRÜN"},
+    {code:0x05, name:"05 TÜRKIS"},
+    {code:0x06, name:"06 LILA"},
+    {code:0x07, name:"07 WEISS"},
+  ];
+  function fillPaletteSelect(sel){
+    sel.innerHTML="";
+    for(const p of PALETTE){
+      const opt=document.createElement("option");
+      opt.value = p.code.toString(16).padStart(2,"0");
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    }
+  }
+  fillPaletteSelect($("ringPalette"));
+
+  // Ring state: 20 bytes
+  const ring = new Array(20).fill(0x00);
+  const selected = new Set(); // indices 0..19
+
+  function renderRing(){
+    const grid = $("ringGrid");
+    grid.innerHTML="";
+    for(let i=0;i<20;i++){
+      const segNum = i+1;
+      const box=document.createElement("div");
+      box.className="segBox"+(selected.has(i) ? " selected":"");
+
+      const hdr=document.createElement("div");
+      hdr.className="segHdr";
+      hdr.innerHTML = `<strong>S${segNum}</strong><span class="mono">${ring[i].toString(16).padStart(2,"0").toUpperCase()}</span>`;
+
+      const sel=document.createElement("select");
+      fillPaletteSelect(sel);
+      sel.value = ring[i].toString(16).padStart(2,"0");
+      sel.onchange = ()=>{
+        ring[i]=parseInt(sel.value,16)&0xFF;
+        renderRing();
+      };
+
+      box.appendChild(hdr);
+      box.appendChild(sel);
+
+      box.onclick = (ev)=>{
+        if(ev.target && ev.target.tagName === "SELECT") return;
+        if(ev.shiftKey){
+          if(selected.has(i)) selected.delete(i);
+          else selected.add(i);
+        }else{
+          selected.clear();
+          selected.add(i);
+        }
+        renderRing();
+      };
+
+      grid.appendChild(box);
+    }
+    $("ringSummary").textContent = ring.map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" ");
+  }
+  renderRing();
+
+  $("btnApplySelected").onclick = ()=>{
+    const code = parseInt($("ringPalette").value,16)&0xFF;
+    if(selected.size===0){ log("⚠️ Keine Segmente selektiert."); return; }
+    for(const idx of selected) ring[idx]=code;
+    renderRing();
+  };
+
+  $("btnFillAll").onclick = ()=>{
+    const code = parseInt($("ringPalette").value,16)&0xFF;
+    for(let i=0;i<20;i++) ring[i]=code;
+    renderRing();
+  };
+
+  $("btnRingOff").onclick = ()=>{
+    for(let i=0;i<20;i++) ring[i]=0x00;
+    renderRing();
+  };
+
+  $("btnSendRing").onclick = async ()=>{
+    await writeBytes(new Uint8Array(ring), "RING(20B)");
+  };
+  $("btnCopyRing").onclick = async ()=>{
+    await copyText(ring.map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(" "));
+  };
+
+  // ===== Hit effect mapping (aus deinen D/T Logs) =====
+  const SEG_TARGET_ID = {
+    "S1":  0x001C,
+    "S2":  0x0031,
+    "S3":  0x0037,
+    "S4":  0x0022,
+    "S5":  0x0016,
+    "S6":  0x0028,
+    "S7":  0x0001,
+    "S8":  0x0007,
+    "S9":  0x0010,
+    "S10": 0x002B,
+    "S11": 0x000A,
+    "S12": 0x0013,
+    "S13": 0x0025,
+    "S14": 0x000D,
+    "S15": 0x002E,
+    "S16": 0x0004,
+    "S17": 0x0034,
+    "S18": 0x001F,
+    "S19": 0x003A,
+    "S20": 0x0019,
+  };
+
+  function fillSegSelect(sel){
+    sel.innerHTML="";
+    for(let i=1;i<=20;i++){
+      const opt=document.createElement("option");
+      opt.value = "S"+i;
+      opt.textContent = "S"+i;
+      sel.appendChild(opt);
+    }
+  }
+  fillSegSelect($("hitSeg"));
+  $("hitSeg").value = "S20";
+
+  function buildHitFrame(){
+    const hitType = parseInt($("hitType").value,16)&0xFF;
+    const seg = $("hitSeg").value;
+    const tid = SEG_TARGET_ID[seg] ?? 0x0000;
+
+    const c1 = hexToRgb($("hitC1").value);
+    const c2 = hexToRgb($("hitC2").value);
+
+    const speed = (parseInt($("hitSpeed").value,10) || 0) & 0xFF;
+
+    const u8 = new Uint8Array(16);
+    u8[0]  = hitType;
+
+    // Color A
+    u8[1] = c1.r; u8[2]=c1.g; u8[3]=c1.b;
+    // Color B
+    u8[4] = c2.r; u8[5]=c2.g; u8[6]=c2.b;
+
+    // target id LE
+    u8[10] = tid & 0xFF;
+    u8[11] = (tid >> 8) & 0xFF;
+
+    // speed (full 00..FF)
+    u8[12] = speed;
+
+    u8[15] = 0x01;
+    return u8;
+  }
+
+  function updateHitSpeedUI(){
+    const v = (parseInt($("hitSpeed").value,10)||0)&0xFF;
+    $("hitSpeedHex").textContent = speedToHex(v);
+  }
+  $("hitSpeed").oninput = updateHitSpeedUI;
+  $("hitSpeed").value = "20"; // default 0x14
+  updateHitSpeedUI();
+
+  $("btnSendHit").onclick = async ()=> writeBytes(buildHitFrame(), "HIT");
+  $("btnCopyHit").onclick = async ()=> copyText(bytesToHex(buildHitFrame()));
+
+  // ===== Presets =====
+  function frame16(op){
+    const u8 = new Uint8Array(16);
+    u8[0]=op&0xFF;
+    u8[15]=0x01;
+    return u8;
+  }
+
+  // Wir lassen FARBE überall auswählbar (auch wenn ein Effekt sie evtl. ignoriert),
+  // damit du testen kannst wie du wolltest.
+  const presets = [
+    {
+      key:"op0c",
+      name:"Touch Rainbow",
+      tag:"OP0C · color test + speed (Board kann Farbe ignorieren)",
+      colors:1,
+      defaultSpeed:5,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0C);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op0f",
+      name:"Rainbow Rotate (3 Segmente)",
+      tag:"OP0F · color test + speed",
+      colors:1,
+      defaultSpeed:5,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0F);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[11]=0x03;
+        u8[12]=speed;
+        u8[13]=0x03;
+        return u8;
+      }
+    },
+    {
+      key:"op10",
+      name:"Split Rainbow",
+      tag:"OP10 · color test + speed",
+      colors:1,
+      defaultSpeed:5,
+      build:(speed, a)=>{
+        const u8 = frame16(0x10);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[11]=0x02;
+        u8[12]=speed;
+        u8[13]=0x02;
+        return u8;
+      }
+    },
+    {
+      key:"op0d",
+      name:"Event 0D (Ring + Touch)",
+      tag:"OP0D · 1 color · speed",
+      colors:1,
+      defaultSpeed:20,
+      build:(speed, a)=>{
+        const u8 = frame16(0x0D);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[11]=0x02;
+        u8[12]=speed;
+        u8[13]=0x02;
+        return u8;
+      }
+    },
+    {
+      key:"op14",
+      name:"Pulse",
+      tag:"OP14 · 1 color · speed",
+      colors:1,
+      defaultSpeed:20, // 0x14
+      build:(speed, a)=>{
+        const u8 = frame16(0x14);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[4]=0x7D;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op15",
+      name:"Dark Solid (Low Brightness)",
+      tag:"OP15 · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x15);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op16",
+      name:"Color Cycle",
+      tag:"OP16 · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x16);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op17",
+      name:"Flash / Blink",
+      tag:"OP17 · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x17);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op18",
+      name:"Flicker",
+      tag:"OP18 · 1 color · speed (Default 0x14 empfohlen)",
+      colors:1,
+      defaultSpeed:20, // 0x14
+      build:(speed, a)=>{
+        const u8 = frame16(0x18);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+  key:"op19",
+  name:"Hunt Flicker",
+  tag:"OP19 · 1 color · speed",
+  colors:1,
+  defaultSpeed:10,
+  build:(speed, a)=>{
+    const u8 = frame16(0x19);
+    u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+
+    // wichtig: Pattern/Mode Bytes wie bei vielen Sniffer-Frames
+    u8[11]=0x02;
+    u8[12]=speed;
+    u8[13]=0x02;
+
+    return u8;
+  }
+},
+    {
+      key:"op1b",
+      name:"Shake",
+      tag:"OP1B · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x1B);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+    {
+      key:"op1d",
+      name:"Fade / Sweep + Fade",
+      tag:"OP1D · 1 color · speed",
+      colors:1,
+      defaultSpeed:10,
+      build:(speed, a)=>{
+        const u8 = frame16(0x1D);
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        u8[12]=speed;
+        return u8;
+      }
+    },
+
+    {
+    key:"op11_next",
+    name:"Next (2-Segment)",
+    tag:"OP11 · 2 colors · speed",
+    colors:2,
+    defaultSpeed:0x05,
+    build:(speed, a, b)=>{
+      const u8 = frame16(0x11);
+
+      // Color A (wie Sniffer)
+      u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+
+      // Color B (WICHTIG: genau hier!)
+      u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+
+      // Rest wie Sniffer-Frame
+      u8[10]=0x10;      // mode / konstant
+      u8[12]=speed;     // speed
+      // u8[15]=0x01 setzt frame16() ohnehin
+
+      return u8;
+  }
+},
+  ];
+
+  function labelWrap(lbl, el){
+    const w=document.createElement("label");
+    const s=document.createElement("span");
+    s.className="small";
+    s.textContent=lbl;
+    w.appendChild(s);
+    w.appendChild(el);
+    return w;
+  }
+
+  function makePresetCard(p){
+    const card = document.createElement("div");
+    card.className="presetCard";
+
+    const top = document.createElement("div");
+    top.className="presetTop";
+    top.innerHTML = `<div><div class="presetTitle">${p.name}</div><div class="tag">${p.tag}</div></div>`;
+    card.appendChild(top);
+
+    const controls = document.createElement("div");
+    controls.className="controls";
+
+    let c1El=null, c2El=null, c3El=null;
+    if(p.colors>=1){
+      c1El=document.createElement("input");
+      c1El.type="color";
+      c1El.value="#ff0000";
+      controls.appendChild(labelWrap("Color A", c1El));
+    }
+    if(p.colors>=2){
+      c2El=document.createElement("input");
+      c2El.type="color";
+      c2El.value="#00ff00";
+      controls.appendChild(labelWrap("Color B", c2El));
+    }
+    if(p.colors>=3){
+      c3El=document.createElement("input");
+      c3El.type="color";
+      c3El.value="#00ffff";
+      controls.appendChild(labelWrap("Color C", c3El));
+    }
+
+    card.appendChild(controls);
+
+    // speed slider (0..35, left slow, right fast)
+    const slider = document.createElement("input");
+    slider.type="range";
+    slider.min="0"; slider.max="100"; slider.value="50";
+    setPresetSliderDefault(slider, p.defaultSpeed);
+
+    const speedP = document.createElement("div");
+    speedP.className="sliderPill mono";
+    speedP.textContent = speedToHex(presetSliderToSpeed(slider.value));
+
+    slider.oninput = ()=> speedP.textContent = speedToHex(presetSliderToSpeed(slider.value));
+
+    const sliderWrap=document.createElement("div");
+    sliderWrap.className="sliderRow";
+    sliderWrap.appendChild(slider);
+    sliderWrap.appendChild(speedP);
+    card.appendChild(sliderWrap);
+
+    const hint=document.createElement("div");
+    hint.className="hint";
+    hint.innerHTML = `Preset-Speed: links langsam (<span class="mono">0x23</span>) → rechts schnell (<span class="mono">0x00</span>)`;
+    card.appendChild(hint);
+
+    const btnRow = document.createElement("div");
+    btnRow.className="controls";
+
+    const btnSend=document.createElement("button");
+    btnSend.textContent="Send";
+
+    const btnCopy=document.createElement("button");
+    btnCopy.textContent="Copy Hex";
+
+    function buildFrame(){
+      const speed = presetSliderToSpeed(slider.value) & 0xFF;
+      const a = c1El ? hexToRgb(c1El.value) : null;
+      const b = c2El ? hexToRgb(c2El.value) : null;
+      const c = c3El ? hexToRgb(c3El.value) : null;
+
+      if(p.colors===1) return p.build(speed, a);
+      if(p.colors===2) return p.build(speed, a, b);
+      if(p.colors===3) return p.build(speed, a, b, c);
+      return p.build(speed);
+    }
+
+    btnSend.onclick = async ()=>{
+      await writeBytes(buildFrame(), `PRESET:${p.name}`);
+    };
+    btnCopy.onclick = async ()=>{
+      await copyText(bytesToHex(buildFrame()));
+    };
+
+    btnRow.appendChild(btnSend);
+    btnRow.appendChild(btnCopy);
+    card.appendChild(btnRow);
+
+    return card;
+  }
+
+  function renderPresets(){
+    const grid=$("presetGrid");
+    grid.innerHTML="";
+    for(const p of presets) grid.appendChild(makePresetCard(p));
+  }
+  renderPresets();
+
+  // ===== manual hex send =====
+  $("btnSendHex").onclick = async ()=>{
+    const parsed = parseHexLine($("hexline").value);
+    if(!parsed) return;
+    if(parsed.error){ log("⚠️ "+parsed.error); return; }
+    await writeBytes(parsed, "HEX");
+  };
+
+  // ===== log =====
+  $("btnClear").onclick = ()=>{
+    $("log").textContent="";
+    rx=0; tx=0;
+    $("rxCount").textContent="0";
+    $("txCount").textContent="0";
+  };
+  $("btnCopyLog").onclick = async ()=> copyText($("log").textContent || "");
+
+  setStatus(false,"Disconnected");
+</script>
+</body>
+</html>
