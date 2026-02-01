@@ -76,11 +76,11 @@ Damit das Script funktioniert, müssen **Userscripts erlaubt sein**:
 - https://www.tampermonkey.net/
 
 Einstellung von Tampermonkey erweiterung
-![Erweitung verwalten](images/tampermonkey-setting.png)
+![Erweitung verwalten](images/Tampermonkey-setting.png)
 
 
 
-![Einstellung setzten und aktualiseren](images/tampermonkey-setting-2.png)
+![Einstellung setzten und aktualiseren](images/Tampermonkey-setting-2.png)
 
 ---
 
