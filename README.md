@@ -23,9 +23,16 @@ Zusätzlich benötigt:
 ## 📦 Installation 
 
 ### 1️⃣ Tampermonkey installieren
+in dem Browser Store "Tampermonkey" suchen und hinzufügen
+Direkt Link:
+Chrome: https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb
+Edge:   https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd
+
+oder auf die Webseite und dem Download link für den jeweiligen Browser folgen
 https://www.tampermonkey.net/
 
 ### 2️⃣ Browser- & Erweiterungs-Einstellungen 
+Einstellungen werden benötigt
 siehe unten Beispiel Screenshot "Anhang Installation"
 
 - Entwicklermodus aktivieren

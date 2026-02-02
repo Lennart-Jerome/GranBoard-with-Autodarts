@@ -23,10 +23,18 @@ Additionally required:
 ## 📦 Installation
 
 ### 1️⃣ Install Tampermonkey
+Search for **“Tampermonkey”** in your browser’s extension store and install it.
+
+Direct links:  
+Chrome: https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb  
+Edge:   https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd  
+
+Alternatively, go to the Tampermonkey website and use the download button for your browser:  
 https://www.tampermonkey.net/
 
-### 2️⃣ Browser & extension settings  
-(see screenshots below: “Installation appendix”)
+### 2️⃣ Browser & extension settings
+These settings are required.  
+See the example screenshots below in the “Installation appendix”.
 
 - Enable developer mode
 - Allow “Userscripts”

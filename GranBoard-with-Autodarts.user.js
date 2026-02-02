@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.11
+// @version      3.0.12
 // @description  GranBoard → Autodarts connect Granboard to Autodarts over Web Bluetooth
 // @author       Lennart-Jerome
 // @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
@@ -55,14 +55,104 @@
     LED_REACTION_PREFIX: "gb_led_rxn_",        // + reactionId -> JSON
   };
 
+
+  /********************************************************************
+   * First-install defaults
+   * - Only set when keys are missing (never overwrite user changes).
+   ********************************************************************/
+  const DEFAULT_INIT_MARK = "gb_defaults_applied_v3011";
+
+  function setIfMissing(key, val) {
+    try {
+      if (localStorage.getItem(key) == null) localStorage.setItem(key, String(val));
+    } catch {}
+  }
+  function setJsonIfMissing(key, obj) {
+    try {
+      if (localStorage.getItem(key) == null) localStorage.setItem(key, JSON.stringify(obj));
+    } catch {}
+  }
+
+  (function applyFirstInstallDefaults() {
+    try {
+      if (localStorage.getItem(DEFAULT_INIT_MARK) === "1") return;
+
+      // Core defaults
+      setIfMissing(STORAGE.OVERLAY, "1");
+      setIfMissing(STORAGE.INPUT_MODE, "auto");
+      setIfMissing(STORAGE.AUTO_NEXT_MODE, "on");
+      setIfMissing(STORAGE.AUTO_NEXT_DELAY_MS, "3000");
+      setIfMissing(STORAGE.LOG_LEVEL, "off");
+
+      // Board defaults
+      setIfMissing(STORAGE.BS_REPLY_INTERVAL, "12");
+      setIfMissing(STORAGE.BS_OUT_SENS, "4");
+      setIfMissing(STORAGE.BS_TARGET_SET, "set2");
+
+      // LED reaction defaults (from your exported localStorage values)
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "connect", {
+        enabled:true, presetKey:"classic_connect", speed:10,
+        colorA:"#2bff00", colorB:"#45e21d", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "next", {
+        enabled:true, presetKey:"classic_next", speed:0,
+        colorA:"#66ff00", colorB:"#05ebd0", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "next_online", {
+        enabled:true, presetKey:"classic_next", speed:7,
+        colorA:"#287ff0", colorB:"#0afe06", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "bust", {
+        enabled:true, presetKey:"op18", speed:20,
+        colorA:"#ff0000", colorB:"#00ffff", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "miss", {
+        enabled:true, presetKey:"op18", speed:15,
+        colorA:"#5b057a", colorB:"#0011ff", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "hit_single", {
+        enabled:true, presetKey:"classic_hit_single", speed:17,
+        colorA:"#ff0000", colorB:"#f2d95f", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "hit_double", {
+        enabled:true, presetKey:"classic_hit_double", speed:20,
+        colorA:"#ff0000", colorB:"#f5cc00", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "hit_triple", {
+        enabled:true, presetKey:"classic_hit_triple", speed:20,
+        colorA:"#ff0000", colorB:"#ffc800", colorC:"#00ffff"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "bull_single", {
+        enabled:true, presetKey:"op1f", speed:17,
+        colorA:"#2a00fa", colorB:"#0f4fe6", colorC:"#14a0db"
+      });
+
+      setJsonIfMissing(STORAGE.LED_REACTION_PREFIX + "bull_double", {
+        enabled:true, presetKey:"op1f", speed:16,
+        colorA:"#ff2600", colorB:"#f90101", colorC:"#aeff00"
+      });
+
+      // Mark as applied (so we never re-run on updates)
+      localStorage.setItem(DEFAULT_INIT_MARK, "1");
+    } catch {}
+  })();
+
   const DEFAULTS = {
     overlay: localStorage.getItem(STORAGE.OVERLAY) !== "0",
     inputMode: (localStorage.getItem(STORAGE.INPUT_MODE) || "auto"),
-    autoNextMode: (localStorage.getItem(STORAGE.AUTO_NEXT_MODE) || "off"),
-    autoNextDelayMs: clamp(parseInt(localStorage.getItem(STORAGE.AUTO_NEXT_DELAY_MS) || "1500", 10) || 1500, 500, 10000),
-    logLevel: (localStorage.getItem(STORAGE.LOG_LEVEL) || "basic"),
+    autoNextMode: (localStorage.getItem(STORAGE.AUTO_NEXT_MODE) || "on"),
+    autoNextDelayMs: clamp(parseInt(localStorage.getItem(STORAGE.AUTO_NEXT_DELAY_MS) || "3000", 10) || 3000, 500, 10000),
+    logLevel: (localStorage.getItem(STORAGE.LOG_LEVEL) || "off"),
     boardReplyInterval: +(localStorage.getItem(STORAGE.BS_REPLY_INTERVAL) || "12"),
-    boardOutSens: +(localStorage.getItem(STORAGE.BS_OUT_SENS) || "7"),
+    boardOutSens: +(localStorage.getItem(STORAGE.BS_OUT_SENS) || "4"),
     boardTargetSet: (localStorage.getItem(STORAGE.BS_TARGET_SET) || "set2"),
   };
 
@@ -1144,22 +1234,25 @@ setOverlayVisible(STATE.overlayVisible);
     { id:"bull_double",  label:"Double Bull" },
   ];
 
+  
   function defaultReactionConfig(id) {
-    // keep previous defaults logically:
-    if (id === "connect") return { enabled:true, presetKey:"classic_connect", speed:10, colorA:"#FF0000", colorB:"#00FFFF" };
-    if (id === "next") return { enabled:true, presetKey:"classic_next", speed:5, colorA:"#FF0000", colorB:"#00FFFF" };
-    // DE: wenn der Gegner "Next" drückt (Online), erkennt das Script den Counter-Reset auf 0
-    // EN: when opponent presses Next (online), script detects the counter reset to 0
-    if (id === "next_online") return { enabled:false, presetKey:"classic_next", speed:5, colorA:"#00FF7A", colorB:"#00FFFF" };
-    if (id === "bust") return { enabled:false, presetKey:"classic_miss", speed:4, colorA:"#FF0000", colorB:"#00FFFF" };
-    if (id === "hit_single") return { enabled:true, presetKey:"classic_hit_single", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
-    if (id === "hit_double") return { enabled:true, presetKey:"classic_hit_double", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
-    if (id === "hit_triple") return { enabled:true, presetKey:"classic_hit_triple", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
-    if (id === "miss") return { enabled:true, presetKey:"classic_miss", speed:4, colorA:"#FF0000", colorB:"#00FFFF" };
-    if (id === "bull_single") return { enabled:true, presetKey:"op1f", speed:20, colorA:"#FF0000", colorB:"#FFA500", colorC:"#00FFFF" };
-    if (id === "bull_double") return { enabled:true, presetKey:"op14", speed:10, colorA:"#FFD000", colorB:"#00FFFF" };
-    return { enabled:false, presetKey:PRESETS[0].key, speed:10, colorA:"#FF0000", colorB:"#00FFFF", colorC:"#00FFFF" };
+    // Defaults (aligned to your exported localStorage values)
+    if (id === "connect") return { enabled:true, presetKey:"classic_connect", speed:10, colorA:"#2bff00", colorB:"#45e21d", colorC:"#00ffff" };
+    if (id === "next") return { enabled:true, presetKey:"classic_next", speed:0, colorA:"#66ff00", colorB:"#05ebd0", colorC:"#00ffff" };
+    if (id === "next_online") return { enabled:true, presetKey:"classic_next", speed:7, colorA:"#287ff0", colorB:"#0afe06", colorC:"#00ffff" };
+    if (id === "bust") return { enabled:true, presetKey:"op18", speed:20, colorA:"#ff0000", colorB:"#00ffff", colorC:"#00ffff" };
+
+    if (id === "hit_single") return { enabled:true, presetKey:"classic_hit_single", speed:17, colorA:"#ff0000", colorB:"#f2d95f", colorC:"#00ffff" };
+    if (id === "hit_double") return { enabled:true, presetKey:"classic_hit_double", speed:20, colorA:"#ff0000", colorB:"#f5cc00", colorC:"#00ffff" };
+    if (id === "hit_triple") return { enabled:true, presetKey:"classic_hit_triple", speed:20, colorA:"#ff0000", colorB:"#ffc800", colorC:"#00ffff" };
+
+    if (id === "miss") return { enabled:true, presetKey:"op18", speed:15, colorA:"#5b057a", colorB:"#0011ff", colorC:"#00ffff" };
+    if (id === "bull_single") return { enabled:true, presetKey:"op1f", speed:17, colorA:"#2a00fa", colorB:"#0f4fe6", colorC:"#14a0db" };
+    if (id === "bull_double") return { enabled:true, presetKey:"op1f", speed:16, colorA:"#ff2600", colorB:"#f90101", colorC:"#aeff00" };
+
+    return { enabled:false, presetKey:PRESETS[0].key, speed:10, colorA:"#ff0000", colorB:"#00ffff", colorC:"#00ffff" };
   }
+
 
   function loadReactionConfig(id) {
     try {
@@ -1677,7 +1770,14 @@ function renderBoardTab() {
 
       testEl.addEventListener("click", async () => {
         saveFromUi();
-        await dispatchLed(r.id, "test");
+
+        // For Hit-Single/Double/Triple tests we always use Segment 1,
+        // but still respect the chosen Color A / Color B (and speed).
+        const testTarget = (r.id === "hit_single" || r.id === "hit_double" || r.id === "hit_triple")
+          ? { n: 1 }
+          : null;
+
+        await dispatchLed(r.id, "test", testTarget);
       });
     }
   }
