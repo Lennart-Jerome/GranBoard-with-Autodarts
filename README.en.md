@@ -26,7 +26,9 @@ Additionally required:
 Search for **“Tampermonkey”** in your browser’s extension store and install it.
 
 Direct links:  
+
 Chrome: https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb  
+
 Edge:   https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd  
 
 Alternatively, go to the Tampermonkey website and use the download button for your browser:  
