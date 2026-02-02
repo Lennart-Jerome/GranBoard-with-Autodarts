@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.8
-// @description  GranBoard BLE → Autodarts with AutoView + Board Settings + per-action LED presets
+// @version      3.0.11
+// @description  GranBoard → Autodarts connect Granboard to Autodarts over Web Bluetooth
 // @author       Lennart-Jerome
 // @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
 // @supportURL   https://github.com/Lennart-Jerome/GranBoard-with-Autodarts/issues
@@ -13,6 +13,21 @@
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==
+
+/**
+ * DE: GranBoard-with-Autodarts Userscript
+ * - Liest GranBoard BLE Hits über WebBluetooth (Proxy/Board) und trägt sie in AutoDarts ein.
+ * - AutoView: wechselt zwischen Keyboard-View und Board-View nur wenn nötig (mit Cooldown gegen Flattern).
+ * - LEDs: pro Aktion frei konfigurierbare Presets (Next/Hit/Miss/Bull/…).
+ * - Online: optionales LED-Event "Next (Online Gegner)" wenn der Turn-Counter auf 0 zurückspringt.
+ *
+ * EN: GranBoard-with-Autodarts userscript
+ * - Reads GranBoard BLE hits via WebBluetooth (proxy/board) and enters them into AutoDarts.
+ * - AutoView: switches between keyboard view and board view only when needed (with cooldown to prevent flapping).
+ * - LEDs: per-action configurable presets (Next/Hit/Miss/Bull/…).
+ * - Online: optional LED event "Next (Online opponent)" when the turn counter resets to 0.
+ */
+
 
 (function () {
   "use strict";
@@ -27,6 +42,8 @@
     LAST_DEVICE_NAME: "gb_last_device_name",
 
     INPUT_MODE: "gb_input_mode_v307",         // auto | keyboard | board
+    AUTO_NEXT_MODE: "gb_auto_next_mode_v308", // off | on
+    AUTO_NEXT_DELAY_MS: "gb_auto_next_delay_ms_v308", // 500..10000
     LOG_LEVEL: "gb_log_level_v307",           // off | basic | adv
 
     // Board settings
@@ -41,6 +58,8 @@
   const DEFAULTS = {
     overlay: localStorage.getItem(STORAGE.OVERLAY) !== "0",
     inputMode: (localStorage.getItem(STORAGE.INPUT_MODE) || "auto"),
+    autoNextMode: (localStorage.getItem(STORAGE.AUTO_NEXT_MODE) || "off"),
+    autoNextDelayMs: clamp(parseInt(localStorage.getItem(STORAGE.AUTO_NEXT_DELAY_MS) || "1500", 10) || 1500, 500, 10000),
     logLevel: (localStorage.getItem(STORAGE.LOG_LEVEL) || "basic"),
     boardReplyInterval: +(localStorage.getItem(STORAGE.BS_REPLY_INTERVAL) || "12"),
     boardOutSens: +(localStorage.getItem(STORAGE.BS_OUT_SENS) || "7"),
@@ -89,6 +108,7 @@
 
     uiSwitchWaitMs: 180,
     uiSwitchRetryMs: 900,
+    uiSwitchCooldownMs: 2500, // DE: Cooldown gegen View-Flattern | EN: cooldown to prevent view flapping
     minMsBetweenThrows: 250,
   };
 
@@ -214,7 +234,28 @@
     return false;
   }
 
-  /********************************************************************
+  
+  function isKeyboardViewActive() {
+    const seg = findSegmentsButton();
+    return !!seg && isActiveModeButton(seg);
+  }
+
+  // DE: Wenn Keyboard-View aktiv ist, aber KEINE Eingabe-Buttons vorhanden sind,
+  // dann ist sehr wahrscheinlich der Gegner am Zug (X01 online). In dem Fall:
+  // Eingaben ignorieren, KEIN View-Switch, KEIN Board-Fallback.
+  // EN: If keyboard view is active but there are no input buttons, it's likely opponent's turn (online).
+  function isOpponentTurnKeyboardNoButtons(allowed) {
+    if (!isKeyboardViewActive()) return false;
+
+    // No numbers AND no action buttons => opponent turn UI
+    const hasAnyInput =
+      allowedHasAnyNumbers(allowed) ||
+      allowed.has("MISS") || allowed.has("DOUBLE_MOD") || allowed.has("TRIPLE_MOD") ||
+      allowed.has("UNDO") || allowed.has("NEXT") || allowed.has("25") || allowed.has("BULL");
+
+    return !hasAnyInput;
+  }
+/********************************************************************
    * AutoView: Keyboard/Segments icon & Boardview icon detection
    ********************************************************************/
   function looksLikeSegmentsButton(btn) {
@@ -250,11 +291,21 @@
   }
 
   let __lastUiSwitchAttemptAt = 0;
+  let __lastUiSwitchAt = 0; // DE: Zeitpunkt des letzten echten View-Switches | EN: timestamp of last actual view switch
+  let __localNextAt = 0;    // DE: Zeitpunkt wenn WIR Next gedrückt haben | EN: timestamp when WE pressed Next
+  let __lastLocalThrowAt = 0; // DE: Zeitpunkt der letzten lokalen Eingabe | EN: timestamp of last local throw entry
+  let __lastBustAt = 0;       // DE/EN: debounce for bust detection
+  let __autoNextTimer = null; // DE: Timer für AutoNext | EN: timer handle for AutoNext
+
 
   async function ensureKeyboardView(logAdv) {
     const now = Date.now();
     if (now - __lastUiSwitchAttemptAt < CONFIG.uiSwitchRetryMs) return false;
     __lastUiSwitchAttemptAt = now;
+
+    // DE: Cooldown gegen View-Flattern (z.B. Leg-Wechsel)
+    // EN: Cooldown to prevent view flapping (e.g., leg transitions)
+    if (now - __lastUiSwitchAt < CONFIG.uiSwitchCooldownMs) return false;
 
     const seg = findSegmentsButton();
     if (!seg) return false;
@@ -263,6 +314,7 @@
     if (isClickableButton(seg)) {
       logAdv?.("AutoView: switching to Keyboard");
       seg.click();
+      __lastUiSwitchAt = now;
       await sleep(CONFIG.uiSwitchWaitMs);
       return true;
     }
@@ -274,6 +326,10 @@
     if (now - __lastUiSwitchAttemptAt < CONFIG.uiSwitchRetryMs) return false;
     __lastUiSwitchAttemptAt = now;
 
+    // DE: Cooldown gegen View-Flattern (z.B. Leg-Wechsel)
+    // EN: Cooldown to prevent view flapping (e.g., leg transitions)
+    if (now - __lastUiSwitchAt < CONFIG.uiSwitchCooldownMs) return false;
+
     const bv = findBoardViewButton();
     if (!bv) return false;
     if (isActiveModeButton(bv)) return true;
@@ -281,6 +337,7 @@
     if (isClickableButton(bv)) {
       logAdv?.("AutoView: switching to Board");
       bv.click();
+      __lastUiSwitchAt = now;
       await sleep(CONFIG.uiSwitchWaitMs);
       return true;
     }
@@ -519,6 +576,8 @@
     overlayVisible: DEFAULTS.overlay,
     settingsOpen: false,
     inputMode: DEFAULTS.inputMode,
+    autoNextMode: DEFAULTS.autoNextMode,
+    autoNextDelayMs: DEFAULTS.autoNextDelayMs,
     logLevel: DEFAULTS.logLevel,
 
     boardReplyInterval: clamp(DEFAULTS.boardReplyInterval, 0, 255),
@@ -530,6 +589,10 @@
 
     // dart counter (for ignoring miss after 3 darts)
     dartCount: 0,
+
+    // DE: letzter ermittelter View-Mode für Statusanzeige
+    // EN: last resolved view mode for status display
+    lastMode: "keyboard",
   };
 
   function createUI() {
@@ -586,6 +649,7 @@
         <div>Status: <span id="gb-status" style="font-weight:700;">disconnected</span></div>
         <div>Device: <span id="gb-device">—</span></div>
         <div>Mode: <span id="gb-mode">—</span></div>
+        <div>Auto player next: <span id="gb-autonext">—</span></div>
         <div>RAW: <span id="gb-raw">—</span></div>
         <div>Action: <span id="gb-action">—</span></div>
       </div>
@@ -648,6 +712,7 @@
       status: $("#gb-status"),
       device: $("#gb-device"),
       mode: $("#gb-mode"),
+      autonext: $("#gb-autonext"),
       raw: $("#gb-raw"),
       action: $("#gb-action"),
 
@@ -713,6 +778,7 @@
   ui.btnSettings.addEventListener("click", () => setSettingsOpen(!STATE.settingsOpen));
 setOverlayVisible(STATE.overlayVisible);
   paintStatus();
+  setAutoNextLabel();
 
   /********************************************************************
    * Hide-mode tab positioning vs Autodarts chat icon
@@ -791,30 +857,38 @@ setOverlayVisible(STATE.overlayVisible);
     {
       key:"classic_connect",
       name:"Connect (Classic)",
-      tag:"Fixed frame (1D ...)",
-      colors:0,
+      tag:"OP1D · 1 color (Color A)",
+      colors:1,
       defaultSpeed:10,
-      build:(speed, a, b)=>{
-        // speed ignored (kept for UI consistency)
-        return hexToU8("1D 4D FF 00 00 00 00 00 00 00 00 00 0A 00 00 01");
+      build:(speed, a)=>{
+        // DE: Connect Classic erlaubt Color A (RGB in Bytes 1..3). Speed bleibt wie original.
+        // EN: Connect classic supports Color A (RGB in bytes 1..3). Speed remains as in original frame.
+        const u8 = hexToU8("1D 4D FF 00 00 00 00 00 00 00 00 00 0A 00 00 01");
+        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
+        return u8;
       }
     },
     {
       key:"classic_next",
       name:"Next (Classic)",
-      tag:"11 ... (2-segment) · 2 colors + speed",
+      tag:"OP11 · 2 colors + speed",
       colors:2,
       defaultSpeed:5,
+      speedMax:35,
       build:(speed, a, b)=>{
         const u8 = frame16(0x11);
+        // Color A
         u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
-        u8[6]=b.r; u8[7]=b.g; u8[8]=b.b;
+        // Color B (fix: correct bytes so Color B works on board)
+        u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
+        // mode bytes
         u8[10]=0x10; u8[11]=0x00;
-        u8[12]=clamp(speed,0,255);
+        // speed byte (0..35)
+        u8[12]=clamp(speed,0,35) & 0xFF;
         return u8;
       }
     },
-    {
+{
       key:"classic_hit_single",
       name:"Hit Single (Classic)",
       tag:"01 ... (color+speed fixed) · (dynamic target hit)",
@@ -1035,24 +1109,6 @@ setOverlayVisible(STATE.overlayVisible);
       }
     },
     {
-      key:"op11_next",
-      name:"Next (2-Segment)",
-      tag:"OP11 · 2 colors · speed",
-      colors:2,
-      defaultSpeed:5,
-      speedMax:35,
-      build:(speed, a, b)=>{
-        const u8 = frame16(0x11);
-        // Color A
-        u8[1]=a.r; u8[2]=a.g; u8[3]=a.b;
-        // Color B
-        u8[4]=b.r; u8[5]=b.g; u8[6]=b.b;
-        u8[10]=0x10;
-        u8[12]=speed & 0xFF;
-        return u8;
-      }
-    },
-    {
       key:"op1f",
       name:"Bull Multicolor Fade (Classic)",
       tag:"OP1F · 3 colors + speed",
@@ -1077,6 +1133,9 @@ setOverlayVisible(STATE.overlayVisible);
   const REACTIONS = [
     { id:"connect",      label:"Connect" },
     { id:"next",         label:"Next" },
+    { id:"next_online",  label:"Next (Online Player)" }, // DE/EN: opponent turn starts indicator
+    { id:"bust",         label:"Bust" },
+
     { id:"hit_single",   label:"Hit Single" },
     { id:"hit_double",   label:"Hit Double" },
     { id:"hit_triple",   label:"Hit Triple" },
@@ -1089,6 +1148,10 @@ setOverlayVisible(STATE.overlayVisible);
     // keep previous defaults logically:
     if (id === "connect") return { enabled:true, presetKey:"classic_connect", speed:10, colorA:"#FF0000", colorB:"#00FFFF" };
     if (id === "next") return { enabled:true, presetKey:"classic_next", speed:5, colorA:"#FF0000", colorB:"#00FFFF" };
+    // DE: wenn der Gegner "Next" drückt (Online), erkennt das Script den Counter-Reset auf 0
+    // EN: when opponent presses Next (online), script detects the counter reset to 0
+    if (id === "next_online") return { enabled:false, presetKey:"classic_next", speed:5, colorA:"#00FF7A", colorB:"#00FFFF" };
+    if (id === "bust") return { enabled:false, presetKey:"classic_miss", speed:4, colorA:"#FF0000", colorB:"#00FFFF" };
     if (id === "hit_single") return { enabled:true, presetKey:"classic_hit_single", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
     if (id === "hit_double") return { enabled:true, presetKey:"classic_hit_double", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
     if (id === "hit_triple") return { enabled:true, presetKey:"classic_hit_triple", speed:20, colorA:"#FF0000", colorB:"#FF7A00" };
@@ -1103,7 +1166,10 @@ setOverlayVisible(STATE.overlayVisible);
       const raw = localStorage.getItem(STORAGE.LED_REACTION_PREFIX + id);
       if (!raw) return defaultReactionConfig(id);
       const obj = JSON.parse(raw);
-      return { ...defaultReactionConfig(id), ...obj };
+      const cfg = { ...defaultReactionConfig(id), ...obj };
+      // migration: removed "Next (2-Segment)" preset -> map to classic_next
+      if (cfg.presetKey === "op11_next") cfg.presetKey = "classic_next";
+      return cfg;
     } catch {
       return defaultReactionConfig(id);
     }
@@ -1298,12 +1364,13 @@ setOverlayVisible(STATE.overlayVisible);
   function renderControlTab() {
     ui.paneControl.innerHTML = `
       <div style="display:grid;gap:10px;">
+
         <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
-          <div style="font-weight:900;margin-bottom:6px;">Auto view switching</div>
+          <div style="font-weight:900;margin-bottom:6px;">View mode automation</div>
           <div style="opacity:.85;font-size:11px;line-height:1.35;margin-bottom:10px;">
-            <b>Auto</b> = Script entscheidet je nach Spiel / Eingabe automatisch (Keyboard oder Board).<br/>
-            <b>Keyboard</b> = immer Keyboard-View (Zahlen-Buttons).<br/>
-            <b>Board</b> = immer Board-View (Segmente).
+            <b>Auto</b> = Script decides automatically based on the current game / UI (Keyboard or Board).<br/>
+            <b>Keyboard</b> = always stay in Keyboard view (number buttons).<br/>
+            <b>Board</b> = always stay in Board view (segments).
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <select id="gb-control-inputmode" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;min-width:160px;font-size:12px;min-height:28px;">
@@ -1313,17 +1380,70 @@ setOverlayVisible(STATE.overlayVisible);
             </select>
           </div>
         </div>
+
+        <div style="padding:10px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);">
+          <div style="font-weight:900;margin-bottom:6px;">Auto player change</div>
+          <div style="opacity:.85;font-size:11px;line-height:1.35;margin-bottom:10px;">
+            Automatically presses <b>NEXT</b> after your <b>3rd dart</b> was entered.<br/>
+            Does <b>not</b> trigger for your online opponent.
+          </div>
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="gb-control-autonext" style="padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:rgba(0,0,0,.25);color:#fff;font-weight:700;min-width:160px;font-size:12px;min-height:28px;">
+              <option value="off">Off</option>
+              <option value="on">On</option>
+            </select>
+
+            <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:220px;">
+              <input id="gb-control-autonext-delay" type="range" min="500" max="10000" step="500" value="${STATE.autoNextDelayMs}" style="flex:1;">
+              <div id="gb-control-autonext-delay-val" style="min-width:64px;text-align:center;font-weight:700;opacity:.9;">${(STATE.autoNextDelayMs/1000).toFixed(1)}s</div>
+            </div>
+          </div>
+        </div>
+
       </div>
     `;
+
     const sel = ui.paneControl.querySelector("#gb-control-inputmode");
-    if (!sel) return;
-    sel.value = STATE.inputMode;
-    sel.addEventListener("change", () => {
-      STATE.inputMode = sel.value || "auto";
-      saveStr(STORAGE.INPUT_MODE, STATE.inputMode);
-ui.logAdv("InputMode = " + STATE.inputMode);
-    });
+    const autoSel = ui.paneControl.querySelector("#gb-control-autonext");
+    const delayEl = ui.paneControl.querySelector("#gb-control-autonext-delay");
+    const delayVal = ui.paneControl.querySelector("#gb-control-autonext-delay-val");
+
+    if (sel) {
+      sel.value = STATE.inputMode;
+      sel.addEventListener("change", () => {
+        STATE.inputMode = sel.value || "auto";
+        saveStr(STORAGE.INPUT_MODE, STATE.inputMode);
+        ui.logAdv("InputMode = " + STATE.inputMode);
+      });
+    }
+
+    if (autoSel) {
+      autoSel.value = STATE.autoNextMode || "off";
+      autoSel.addEventListener("change", () => {
+        STATE.autoNextMode = autoSel.value || "off";
+        saveStr(STORAGE.AUTO_NEXT_MODE, STATE.autoNextMode);
+        ui.logAdv("AutoNextMode = " + STATE.autoNextMode);
+        setModeLabel(STATE.lastMode || "keyboard");
+        setAutoNextLabel(); // refresh status lines
+      });
+    }
+
+    if (delayEl && delayVal) {
+      delayEl.value = String(STATE.autoNextDelayMs || 1500);
+      delayVal.textContent = ((parseInt(delayEl.value,10)||1500)/1000).toFixed(1) + "s";
+
+      delayEl.addEventListener("input", () => {
+        const ms = clamp(parseInt(delayEl.value,10) || 1500, 500, 10000);
+        STATE.autoNextDelayMs = ms;
+        delayVal.textContent = (ms/1000).toFixed(1) + "s";
+        saveStr(STORAGE.AUTO_NEXT_DELAY_MS, String(ms));
+        setModeLabel(STATE.lastMode || "keyboard");
+        setAutoNextLabel(); // refresh status lines
+      });
+    }
   }
+
 
 function renderBoardTab() {
     ui.paneBoard.innerHTML = `
@@ -1573,6 +1693,102 @@ function renderBoardTab() {
   renderAllSettingsTabs();
 
   /********************************************************************
+   * Online Gegner: Turn-Counter ("turn-points") beobachten
+   * DE: Wenn der Counter von >0 auf 0 springt, war sehr wahrscheinlich der Gegner "Next".
+   *     Optionales LED-Event: next_online
+   * EN: When the counter transitions from >0 to 0, opponent likely pressed "Next".
+   *     Optional LED event: next_online
+   ********************************************************************/
+  (function watchTurnPointsForOpponentNext() {
+    let lastVal = null;
+    let lastZeroAt = 0;
+
+    function readTurnPointsEl() {
+      // DE: robust gegen wechselnde CSS-Hashes, sucht nach class-Teilstring
+      // EN: robust against changing CSS hashes, searches by class substring
+      const els = Array.from(document.querySelectorAll("p.chakra-text"));
+      return els.find(el => (el.className || "").includes("ad-ext-turn-points")) || null;
+    }
+
+    function readTurnText(el) {
+      return String(el?.textContent || "").trim();
+    }
+
+    function isBustText(txt) {
+      const u = (txt || "").trim().toUpperCase();
+      return (u === "BUST" || u === "BUSTED" || u.includes("BUST"));
+    }
+
+    function parseValFromText(txt) {
+      const n = parseInt(String(txt || "").trim(), 10);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function tick() {
+      const el = readTurnPointsEl();
+      if (!el) return;
+
+      const txt = readTurnText(el);
+      const now = Date.now();
+
+      // 2) Bust detection (local) + optional LED + AutoNext
+      if (isBustText(txt)) {
+        const localWindowMs = 1500; // must be close to our last local throw
+        const debounceMs = 900;
+
+        const isLocal = (now - (__lastLocalThrowAt || 0)) < localWindowMs;
+        const debounced = (now - (__lastBustAt || 0)) < debounceMs;
+
+        if (isLocal && !debounced) {
+          __lastBustAt = now;
+
+          // optional LED event (default: disabled)
+          dispatchLed("bust", "bust").catch(()=>{});
+
+          // Bust ends the turn immediately
+          resetDartCounter("BUST");
+
+          // AutoNext should also run on bust if enabled
+          scheduleAutoNext("bust");
+          try { ui?.logAdv?.("BUST detected (local) -> optional LED bust + AutoNext"); } catch(e) {}
+        }
+        return; // do not treat bust as opponent-next signal
+      }
+
+      const v = parseValFromText(txt);
+      if (v == null) return;
+
+      if (lastVal == null) lastVal = v;
+
+      const localWindowMs = 1200; // DE: Fenster in dem wir "Next" selbst waren | EN: window where we consider it local next
+      const debounceMs = 800;     // DE/EN: verhindert Spam
+
+      const becameZero = (v === 0 && lastVal > 0);
+      const wasLocal = (now - __localNextAt) < localWindowMs;
+      const debounced = (now - lastZeroAt) < debounceMs;
+
+      if (becameZero && !wasLocal && !debounced) {
+        lastZeroAt = now;
+
+        // DE: nur ausführen, wenn User es in LEDs aktiviert hat (default: off)
+        // EN: only fires if user enabled it in LEDs (default: off)
+        dispatchLed("next_online", "opponent_next").catch(()=>{});
+        try { ui?.logAdv?.("Opponent next detected via turn counter reset -> LED next_online"); } catch(e) {}
+      }
+
+      lastVal = v;
+    }
+
+    // DE: Polling ist in SPAs am zuverlässigsten; Observer macht es schneller
+    // EN: polling is most reliable in SPAs; observer speeds it up
+    setInterval(tick, 250);
+
+    const obs = new MutationObserver(() => tick());
+    obs.observe(document.documentElement, { subtree:true, childList:true, characterData:true });
+  })();
+
+
+  /********************************************************************
    * Click injection (Keyboard)
    ********************************************************************/
   async function clickMiss() {
@@ -1655,11 +1871,30 @@ function renderBoardTab() {
   let lastInjectAt = 0;
 
   function setModeLabel(mode) {
-    ui.mode.textContent = (mode === "board") ? "Boardview" : "Keyboardview";
+    // DE: Nur den aktuellen View-Mode anzeigen (Keyboard/Board).
+    // EN: Show only the current view mode (keyboard/board).
+    const base = (mode === "board") ? "Boardview" : "Keyboardview";
+    STATE.lastMode = mode;
+    ui.mode.textContent = base;
+  }
+
+  function setAutoNextLabel() {
+    // DE: Auto Player Next separat anzeigen (On/Off + Sekunden).
+    // EN: Show auto player next separately (on/off + seconds).
+    if (!ui.autonext) return;
+    if (STATE.autoNextMode === "on") {
+      const s = (clamp(STATE.autoNextDelayMs || 1500, 500, 10000) / 1000).toFixed(1);
+      ui.autonext.textContent = `On (${s}s)`;
+    } else {
+      ui.autonext.textContent = "Off";
+    }
   }
 
   function resetDartCounter(reason) {
     STATE.dartCount = 0;
+    // DE: Falls AutoNext geplant war, abbrechen
+    // EN: Cancel any pending AutoNext
+    if (__autoNextTimer) { try { clearTimeout(__autoNextTimer); } catch {} __autoNextTimer = null; }
     ui.logAdv("DartCounter reset (" + reason + ")");
   }
 
@@ -1667,24 +1902,76 @@ function renderBoardTab() {
     STATE.dartCount = clamp(STATE.dartCount + 1, 0, 99);
   }
 
+
+function scheduleAutoNext(reason) {
+  // DE/EN: Generic AutoNext scheduler (used for 3rd dart and for BUST)
+  if (STATE.autoNextMode !== "on") return;
+  if (__autoNextTimer) return; // already scheduled
+
+  const delay = clamp(STATE.autoNextDelayMs || 1500, 500, 10000);
+  ui.logAdv(`AutoNext scheduled in ${delay}ms (${reason || "signal"})`);
+
+  __autoNextTimer = setTimeout(async () => {
+    __autoNextTimer = null;
+
+    try {
+      ui.action.textContent = "NEXT";
+      // DE: LED priorisieren.
+      // EN: Prioritize LED.
+      dispatchLed("next", "auto_next").catch(()=>{});
+      await sleep(0);
+
+      const ok = await clickAction("NEXT");
+      if (ok) {
+        __localNextAt = Date.now(); // treat as local NEXT
+        resetDartCounter("AUTO_NEXT");
+      }
+    } catch (e) {
+      ui.logAdv("AutoNext error: " + (e?.message || e));
+    }
+  }, delay);
+}
+
+function maybeScheduleAutoNextAfterThirdDart() {
+  // DE: Auto Player Change = nach 3 Darts automatisch NEXT drücken (nur lokale Eingabe)
+  // EN: Auto player change = press NEXT automatically after 3 darts (local input only)
+  if (STATE.dartCount !== 3) return;
+  scheduleAutoNext("third_dart");
+}
+
+
   async function injectTarget(target, sourceLabel) {
     const now = Date.now();
     if (now - lastInjectAt < CONFIG.minMsBetweenThrows) return;
     lastInjectAt = now;
 
     const allowed = getAllowedActions();
+
+    // 1) Opponent-turn detection (Keyboardview without keypad/buttons)
+    if (isOpponentTurnKeyboardNoButtons(allowed)) {
+      ui.logAdv("Opponent turn detected (keyboard view without input buttons) -> ignore input");
+      ui.action.textContent = "—";
+      ui.raw.textContent = sourceLabel || "BLE";
+      return;
+    }
+
     const mode = resolveMode(allowed);
     setModeLabel(mode);
+    setAutoNextLabel();
 
     ui.raw.textContent = sourceLabel || "BLE";
 
     // special: Next button
     if (target && target.__specialNext) {
       ui.action.textContent = "NEXT";
+      // DE: LED priorisieren (nicht auf DOM-Click warten).
+      // EN: Prioritize LED (do not wait for DOM click).
+      dispatchLed("next", "next", target).catch(()=>{});
+      await sleep(0);
       const ok = await clickAction("NEXT");
       if (ok) {
+        __localNextAt = Date.now(); // DE: wir haben Next gedrückt | EN: we pressed Next
         resetDartCounter("NEXT");
-        await dispatchLed("next", "next", target);
       }
       return;
     }
@@ -1697,14 +1984,18 @@ function renderBoardTab() {
 
     // always count darts for hit/bull/miss once processed (not for ignored)
     incDartCounter();
+    __lastLocalThrowAt = Date.now();
 
     // LED hit dispatch (before UI click, but same outcome for preview)
-    if (target.ring === "SBULL") await dispatchLed("bull_single", "hit", target);
-    else if (target.ring === "DBULL") await dispatchLed("bull_double", "hit", target);
-    else if (target.ring === "OUT") await dispatchLed("miss", "hit", target);
-    else if (target.ring === "D") await dispatchLed("hit_double", "hit", target);
-    else if (target.ring === "T") await dispatchLed("hit_triple", "hit", target);
-    else await dispatchLed("hit_single", "hit", target);
+    // DE: LED soll "sofort" raus — nicht auf Autodarts DOM/Clicks warten.
+    // EN: Send LED "immediately" — do not block on Autodarts DOM/click work.
+    if (target.ring === "SBULL") dispatchLed("bull_single", "hit", target).catch(()=>{});
+    else if (target.ring === "DBULL") dispatchLed("bull_double", "hit", target).catch(()=>{});
+    else if (target.ring === "OUT") dispatchLed("miss", "hit", target).catch(()=>{});
+    else if (target.ring === "D") dispatchLed("hit_double", "hit", target).catch(()=>{});
+    else if (target.ring === "T") dispatchLed("hit_triple", "hit", target).catch(()=>{});
+    else dispatchLed("hit_single", "hit", target).catch(()=>{});
+    await sleep(0);
 
     const kbAction = targetToKeyboardAction(target);
     ui.action.textContent = kbAction || "—";
@@ -1738,6 +2029,9 @@ function renderBoardTab() {
         ui.logAdv("Keyboard click failed: " + kbAction + " -> MISS");
         await clickAction("MISS");
       }
+
+      // DE/EN: after local 3rd dart entry we can auto-press NEXT
+      maybeScheduleAutoNextAfterThirdDart();
       return;
     }
 
@@ -1751,6 +2045,8 @@ function renderBoardTab() {
     }
     try {
       await BOARD.fire(bk.kind, bk.n || 0);
+      // DE/EN: after local 3rd dart entry we can auto-press NEXT
+      maybeScheduleAutoNextAfterThirdDart();
     } catch (e) {
       ui.logAdv("Board fire error: " + (e?.message || e));
       await clickAction("MISS");

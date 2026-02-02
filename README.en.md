@@ -1,183 +1,147 @@
 # GranBoard with Autodarts
 
-**GranBoard with Autodarts** is a Tampermonkey userscript that connects a **GranBoard via Bluetooth (BLE)** directly to **Autodarts** and automatically enters throws.
+**GranBoard with Autodarts** is a userscript (Tampermonkey) that connects a **GranBoard via Bluetooth (BLE)** directly to **Autodarts** and automatically enters throws.
 
-The script intelligently decides whether input should be handled via the **Autodarts keyboard** or directly via the **board view**, depending on the active game mode.
-
----
-
-## ✨ Features
-
-- 🔵 Direct Bluetooth connection to GranBoard (WebBluetooth)
-- 🎯 Automatic detection of hits (Single / Double / Triple / Bull / Miss)
-- ⌨️ **Keyboard input** when numbers are allowed in the Autodarts keypad
-- 🎯 **Boardview fallback** when no numbers are allowed (e.g. Bobs27)
-- 🔁 Automatic switching between keyboard and board view (auto mode)
-- 👁️ Overlay with status, mode display and debug logs
-- 🌈 **Visual feedback on the board** when `Next` is pressed (touch field briefly lights up)
+The script intelligently detects **how inputs must be entered in Autodarts** and automatically switches between **keyboard input** and **board view**, depending on the current game mode.
 
 ---
 
-## 🧩 Supported Game Modes (Examples)
+## 🖥️ Requirements (IMPORTANT)
 
-- ✅ X01
-- ✅ Cricket
-- ✅ Training
-- ✅ Bobs27  
-  → No numeric keypad available, only *Hit / Miss / Undo / Next*  
-  → The script automatically switches to **Boardview** and clicks the board ❗ Manuel switch i Autodarts currently needed
+- ✅ PC or laptop **with Bluetooth**
+- ✅ Google Chrome or Microsoft Edge
+- ❌ No smartphone / tablet
+- ❌ Firefox is not supported (no WebBluetooth)
 
----
-
-## ⚠️ Current Development Status (Important)
-
-- ❗ **No Auto-Next yet**  
-  → `Next` must currently be triggered **manually via the GranBoard touch field**  
-  → Automatic Next is **planned**, but not implemented yet
-- ❗ **LED control is still in development**  
-  → Stop initial Rainbow effekt by disconnect and reconnect
-  → Currently, there is **only visual feedback** when `Next` is pressed  
-  → The touch field briefly lights up in rainbow mode  
-  → Further LED integrations are planned (DevTools already prepared)
-
----
-
-## 🖥️ Requirements
-
-- Google **Chrome** or **Microsoft Edge**
-- Bluetooth enabled
-- GranBoard powered on
+Additionally required:
+- GranBoard (powered on)
 - Autodarts account
-- **Tampermonkey** browser extension
-
-> ❌ Firefox is **not supported**, as WebBluetooth is not reliably available.
+- Tampermonkey browser extension
 
 ---
 
-## 🔧 Browser Settings (Very Important)
-
-To ensure proper operation, **userscripts must be allowed**:
-
-### Chrome / Edge
-1. Install Tampermonkey
-2. In Tampermonkey:
-   - Enable “Allow userscripts”❗ 
-3. Allow Bluetooth access in the browser
-4. Do **not** block the Bluetooth device selection popup
-
-> ⚠️ The Bluetooth dialog must **always be confirmed manually**  
-> (browser security requirement)
-
----
-
-## 📦 Installation
+## 📦 Installation (2 minutes)
 
 ### 1️⃣ Install Tampermonkey
-- https://www.tampermonkey.net/
+https://www.tampermonkey.net/
 
-Einstellung von Tampermonkey erweiterung
-![Settings ](images/Tampermonkey-setting.png)
+### 2️⃣ Browser & extension settings  
+(see screenshots below: “Installation appendix”)
 
-
-
-![Settings](images/Tampermonkey-setting-2.png)
-
-### 2️⃣ Install the userscript
-👉 Open this link (Tampermonkey will detect it automatically):
-
-https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
-
-### 3️⃣ Open Autodarts
-- https://play.autodarts.io
-
-### 4️⃣ Power on the GranBoard
-
-### 5️⃣ Open the overlay
-- A **GB circle** appears in the bottom-right corner
-- Click it to open the overlay
-
-### 6️⃣ Connect
-- Click **Connect**
-- Select the GranBoard in the Bluetooth dialog
-- Confirm the connection
+- Enable developer mode
+- Allow “Userscripts”
+- Website access: **All websites**  
+  → (at minimum allow https://play.autodarts.io)
 
 ---
 
-## 🔄 How Does the Input Logic Work?
+### 3️⃣ Install the userscript
+👉 Open:
+https://raw.githubusercontent.com/Lennart-Jerome/GranBoard-with-Autodarts/main/GranBoard-with-Autodarts.user.js
 
-### 🔹 Keyboard Has Priority
-If numeric buttons are **visible and clickable** in the Autodarts keypad (e.g. `S20`, `D20`, `T20`):
-- Throws are entered **via the keyboard**
-- All other hits are treated as **Miss**
 
-### 🔹 Boardview Fallback (Auto)
-If the keypad **does not contain any numbers**, for example:
-- only `Hit`
-- `Miss`
-- `Undo`
-- `Next`
+Tampermonkey will automatically detect the script  
+(Tampermonkey must already be installed at this point).
 
-➡️ Then:
-- the script automatically switches to **Boardview**
-- clicks the board at the calculated position
+---
+
+### “Installation appendix”  
+Otherwise the script will not work:
+
+![Tampermonkey settings](images/tm-install-01.png)  
+![Website access permissions](images/tm-install-02.png)
+
+---
+
+## ▶️ First steps
+
+1. Open Autodarts: https://play.autodarts.io  
+2. Power on the GranBoard  
+3. A **GB button** appears in the bottom right corner  
+4. Click → overlay opens  
+5. Click **Connect**  
+6. Select the GranBoard in the Bluetooth dialog
+
+---
+
+## 🧠 How does the script work?
+
+### 🔁 AutoView logic (recommended)
+
+For **every throw**, the script checks which input method Autodarts allows:
+
+| Situation | Action |
+|---------|--------|
+Number keypad available | Input via keyboard
+No numbers (e.g. Bobs27) | Automatic switch to board view
+Board view active | Direct click on the dartboard
 
 The current mode is shown in the overlay.
 
+![AutoView flow](images/flow-autoview.png)
+
 ---
 
-## 🔘 Overlay & Controls
+## ⚙️ Settings
 
-- **Connect / Disconnect**: Bluetooth connection
-- **Mode selection**:
-  - Auto (recommended)
-  - Keyboard
-  - Board
-- **Debug mode**:
-  - Displays logs and raw data
-- **Status display**:
-  - Green = connected
-  - Red = disconnected
+### 🕹 Control
+![Control Tab](images/settings-control.png)
+
+- **Auto** → recommended
+- Keyboard → always use keypad
+- Board → always use board view
+
+---
+
+### 🌈 LED
+![LED Tab](images/settings-led.png)
+
+- LED reactions per event
+- Presets, colors & speed
+- Test button for each effect
+
+---
+
+### 🎯 Board
+![Board Tab](images/settings-board.png)
+
+- Reply interval
+- Out sensitivity
+- Target sets (SET1–SET4)
+
+---
+
+### 🪵 Logs
+- Off / Basic / Advanced
+- RAW BLE data visible
 
 ---
 
 ## 🔐 Privacy & Security
 
-- ✅ No personal data
-- ✅ No accounts, tokens or IDs
-- ✅ No fixed MAC addresses
-- ✅ BLE UUIDs are identical across all GranBoards
-- ✅ All data remains local in the browser
+- ✔️ No accounts or tokens
+- ✔️ No fixed MAC addresses
+- ✔️ All data stays local in the browser
+- ✔️ BLE UUIDs are GranBoard standard
 
 ---
 
-## 🧪 Compatibility
+## 🚧 Known limitations
 
-- Tested with GranBoard (BLE)
-- Should work with all GranBoard models supported by the official GranBoard app
-
----
-
-## 🚧 Known Limitations
-
+- Bluetooth dialog must always be confirmed manually
 - Autodarts UI changes may require adjustments
-- WebBluetooth behavior depends on the browser
-- Firefox is not supported
 
 ---
 
-## 🛠️ Development & Roadmap
+## 🚀 Roadmap
 
-Planned features:
-- Automatic `Next`
-- Extended LED control
-- More detailed visual feedback
-- Optional browser extension
-
-Contributions, feedback and testing are welcome 👍
+- Auto-Next (optional)
+- Additional LED events
+- More detailed board feedback
 
 ---
 
 ## 📜 License
 
-Private use and hobby projects allowed.  
-No official affiliation with Autodarts or GranBoard.
+Private use & hobby projects allowed.  
+No official connection to Autodarts or GranBoard.
