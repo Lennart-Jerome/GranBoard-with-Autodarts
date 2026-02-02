@@ -20,7 +20,7 @@ Additionally required:
 
 ---
 
-## 📦 Installation (2 minutes)
+## 📦 Installation
 
 ### 1️⃣ Install Tampermonkey
 https://www.tampermonkey.net/

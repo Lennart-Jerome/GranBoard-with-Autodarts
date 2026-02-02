@@ -20,12 +20,13 @@ Zusätzlich benötigt:
 
 ---
 
-## 📦 Installation (2 Minuten)
+## 📦 Installation 
 
 ### 1️⃣ Tampermonkey installieren
 https://www.tampermonkey.net/
 
-### 2️⃣ Browser- & Erweiterungs-Einstellungen (siehe unten Beipiel Screnshot "Anhang Installation")
+### 2️⃣ Browser- & Erweiterungs-Einstellungen 
+siehe unten Beispiel Screenshot "Anhang Installation"
 
 - Entwicklermodus aktivieren
 - „Userscripts zulassen“
