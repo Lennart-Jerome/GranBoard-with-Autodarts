@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.15.
+// @version      3.0.15
 // @description  GranBoard → Autodarts connect Granboard to Autodarts over Web Bluetooth
 // @author       Lennart-Jerome
 // @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
