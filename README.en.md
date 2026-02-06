@@ -145,9 +145,7 @@ The current mode is shown in the overlay.
 
 ## 🚀 Roadmap
 
-- Auto-Next (optional)
 - Additional LED events
-- More detailed board feedback
 
 ---
 

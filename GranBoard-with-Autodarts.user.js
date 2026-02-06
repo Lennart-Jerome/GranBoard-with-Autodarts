@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.12
+// @version      3.0.15.
 // @description  GranBoard → Autodarts connect Granboard to Autodarts over Web Bluetooth
 // @author       Lennart-Jerome
 // @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
@@ -31,6 +31,7 @@
 
 (function () {
   "use strict";
+let __lastUndoAt = 0; // timestamp of last UNDO (ms)
   if (window.__GB_AD_STEP3_V307_INIT__) return;
   window.__GB_AD_STEP3_V307_INIT__ = true;
 
@@ -304,6 +305,37 @@
     }
     return null;
   }
+  // --- Undo handling: keep dartCount in sync when user corrects throws ---
+  function handleUndo(reason) {
+    const allowed = getAllowedActions();
+    if (isOpponentTurnKeyboardNoButtons(allowed)) return;
+
+    __lastUndoAt = Date.now();
+
+    // cancel pending AutoNext if any
+    if (__autoNextTimer) {
+      try { clearTimeout(__autoNextTimer); } catch {}
+      __autoNextTimer = null;
+      ui?.logAdv?.("AutoNext canceled due to UNDO");
+    }
+
+    const before = STATE.dartCount;
+    STATE.dartCount = clamp((STATE.dartCount || 0) - 1, 0, 99);
+    ui?.logAdv?.(`UNDO detected -> dartCount ${before} -> ${STATE.dartCount} (${reason || "click"})`);
+  }
+
+  // capture Undo button clicks anywhere in the app (SPA-safe)
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target?.closest?.("button");
+    if (!btn) return;
+
+    const action = normalizeActionFromButtonText(btn.textContent || "");
+    if (action === "UNDO") {
+      handleUndo("button");
+    }
+  }, true);
+
+
 
   function getAllowedActions() {
     const allowed = new Set();
@@ -437,6 +469,9 @@
   // AutoView: on "New game / Start" actions, prefer Keyboard view as the default.
   // We do this with a small retry loop because the Segments button may appear a moment later.
   function scheduleKeyboardOnNewGame(reason) {
+    // Reset local dart counter when a new game/match is started
+    resetDartCounter("NEW_GAME");
+
     if (STATE.inputMode !== "auto") return;
     let tries = 0;
     const maxTries = 8;
@@ -1839,7 +1874,10 @@ function renderBoardTab() {
         const isLocal = (now - (__lastLocalThrowAt || 0)) < localWindowMs;
         const debounced = (now - (__lastBustAt || 0)) < debounceMs;
 
-        if (isLocal && !debounced) {
+        
+      const undoWindowMs = 1200;
+      const wasUndo = (now - (__lastUndoAt || 0)) < undoWindowMs;
+if (isLocal && !debounced) {
           __lastBustAt = now;
 
           // optional LED event (default: disabled)
@@ -1867,7 +1905,7 @@ function renderBoardTab() {
       const wasLocal = (now - __localNextAt) < localWindowMs;
       const debounced = (now - lastZeroAt) < debounceMs;
 
-      if (becameZero && !wasLocal && !debounced) {
+      if (becameZero && !wasLocal && !debounced && !wasUndo) {
         lastZeroAt = now;
 
         // DE: nur ausführen, wenn User es in LEDs aktiviert hat (default: off)
@@ -1887,6 +1925,59 @@ function renderBoardTab() {
     obs.observe(document.documentElement, { subtree:true, childList:true, characterData:true });
   })();
 
+  /********************************************************************
+   * New game detection (fallback)
+   * DE: Manche Game-Starts werden nicht über Button-Clicks erkannt (SPA / quick restart).
+   *     Wenn die Round-Anzeige wieder auf R1/x springt, resetten wir dartCount.
+   * EN: Some game starts are not captured by button clicks (SPA / quick restart).
+   *     If the round indicator jumps back to R1/x, reset dartCount.
+   ********************************************************************/
+  (function watchRoundIndicatorForNewGame() {
+    let lastR = null;
+    let lastResetAt = 0;
+
+    function readRoundText() {
+      // Typical indicator looks like: "R1/8" (sometimes with spaces).
+      const re = /\bR\s*\d+\s*\/\s*\d+\b/i;
+      // Prefer small text nodes (Chakra) first to keep scanning cheap.
+      const candidates = Array.from(document.querySelectorAll('p,span,div,button')).slice(0, 400);
+      for (const el of candidates) {
+        const txt = (el.textContent || '').trim();
+        if (!txt) continue;
+        if (!re.test(txt)) continue;
+        // Reduce false-positives by requiring visibility (header only).
+        if (!isElementVisible(el)) continue;
+        const m = txt.match(re);
+        if (m) return m[0].replace(/\s+/g, '');
+      }
+      return null;
+    }
+
+    function tick() {
+      const now = Date.now();
+      const r = readRoundText();
+      if (!r) return;
+
+      // When it jumps to R1/... after being something else -> new game / leg restart.
+      const isR1 = /^R1\//i.test(r);
+      const wasDifferent = (lastR != null && lastR !== r);
+      const debounce = (now - lastResetAt) < 1500;
+
+      if (isR1 && wasDifferent && !debounce) {
+        lastResetAt = now;
+        resetDartCounter('ROUND_RESET');
+        ui?.logAdv?.('Round indicator reset -> DartCounter reset');
+      }
+
+      lastR = r;
+    }
+
+    setInterval(tick, 600);
+    const obs = new MutationObserver(() => tick());
+    obs.observe(document.documentElement, { subtree:true, childList:true, characterData:true });
+  })();
+
+
 
   /********************************************************************
    * Click injection (Keyboard)
@@ -1900,20 +1991,39 @@ function renderBoardTab() {
     if (isClickableButton(btn)) btn.click();
   }
 
-  async function clickBull50OrFallback() {
-    const bullBtn = findBtnByExactTextAny(["Bull"]);
-    if (isClickableButton(bullBtn)) { bullBtn.click(); return true; }
+  async function clickBull50OrFallback(preferDouble25 = true) {
+    // Some keypad variants require: DOUBLE -> 25 for DBull (50).
+    // Others have a direct "Bull" button. We try the safest option first.
 
-    // fallback: Double + 25
     const dbl = findBtnByExactTextAny(["Double"]);
-    if (isClickableButton(dbl)) {
+    const b25 = findBtnByExactTextAny(["25"]);
+    const bullBtn = findBtnByExactTextAny(["Bull"]);
+
+    // Preferred path (works on keypads where Bull is NOT a direct 50 input)
+    if (preferDouble25 && isClickableButton(dbl) && isClickableButton(b25)) {
       dbl.click();
       await sleep(200);
-      await click25();
+      b25.click();
       return true;
     }
+
+    // Direct Bull button (some keypads use this for 50)
+    if (isClickableButton(bullBtn)) {
+      bullBtn.click();
+      return true;
+    }
+
+    // Fallback: DOUBLE -> 25 if available
+    if (isClickableButton(dbl) && isClickableButton(b25)) {
+      dbl.click();
+      await sleep(200);
+      b25.click();
+      return true;
+    }
+
     return false;
   }
+
 
   async function clickWithModifier(kind, n) {
     const modLabel = (kind === "D") ? "Double" : "Triple";
@@ -1947,7 +2057,7 @@ function renderBoardTab() {
     }
     if (action === "MISS") { await clickMiss(); return true; }
     if (action === "25") { await click25(); return true; }
-    if (action === "BULL") { return await clickBull50OrFallback(); }
+    if (action === "BULL") { return await clickBull50OrFallback(true); }
 
     const direct = findBtnByExactTextAny([action]);
     if (isClickableButton(direct)) { direct.click(); return true; }

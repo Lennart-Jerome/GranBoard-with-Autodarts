@@ -25,7 +25,7 @@ Zusätzlich benötigt:
 ### 1️⃣ Tampermonkey installieren
 in dem Browser Store "Tampermonkey" suchen und hinzufügen
 
-Direkt Link:
+Direkt Link (rechts klick in neuem tab öffen):
 
 Chrome: https://chromewebstore.google.com/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo?utm_source=item-share-cb
 
@@ -142,9 +142,7 @@ Der aktuelle Modus wird im Overlay angezeigt.
 
 ## 🚀 Roadmap
 
-- Auto-Next (optional)
 - Weitere LED-Events
-- Feineres Board-Feedback
 
 ---
 
