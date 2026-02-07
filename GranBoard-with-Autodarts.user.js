@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GranBoard-with-Autodarts
 // @namespace    https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
-// @version      3.0.15
+// @version      3.0.17
 // @description  GranBoard → Autodarts connect Granboard to Autodarts over Web Bluetooth
 // @author       Lennart-Jerome
 // @homepageURL  https://github.com/Lennart-Jerome/GranBoard-with-Autodarts
@@ -1837,6 +1837,7 @@ function renderBoardTab() {
   (function watchTurnPointsForOpponentNext() {
     let lastVal = null;
     let lastZeroAt = 0;
+    let lastOpponentBustAt = 0; // timestamp of last opponent BUST seen (ms)
 
     function readTurnPointsEl() {
       // DE: robust gegen wechselnde CSS-Hashes, sucht nach class-Teilstring
@@ -1866,7 +1867,10 @@ function renderBoardTab() {
       const txt = readTurnText(el);
       const now = Date.now();
 
-      // 2) Bust detection (local) + optional LED + AutoNext
+            const undoWindowMs = 1200;
+      const wasUndo = (now - (__lastUndoAt || 0)) < undoWindowMs;
+
+// 2) Bust detection (local) + optional LED + AutoNext
       if (isBustText(txt)) {
         const localWindowMs = 1500; // must be close to our last local throw
         const debounceMs = 900;
@@ -1874,10 +1878,16 @@ function renderBoardTab() {
         const isLocal = (now - (__lastLocalThrowAt || 0)) < localWindowMs;
         const debounced = (now - (__lastBustAt || 0)) < debounceMs;
 
-        
-      const undoWindowMs = 1200;
-      const wasUndo = (now - (__lastUndoAt || 0)) < undoWindowMs;
-if (isLocal && !debounced) {
+        // If it's NOT local, remember it as an opponent bust so we can trigger next_online
+        // even if the counter resets to 0 without a >0 -> 0 transition.
+        if (!isLocal) {
+          const oppDebounceMs = 800;
+          if ((now - (lastOpponentBustAt || 0)) > oppDebounceMs) {
+            lastOpponentBustAt = now;
+          }
+        }
+
+        if (isLocal && !debounced) {
           __lastBustAt = now;
 
           // optional LED event (default: disabled)
@@ -1905,8 +1915,12 @@ if (isLocal && !debounced) {
       const wasLocal = (now - __localNextAt) < localWindowMs;
       const debounced = (now - lastZeroAt) < debounceMs;
 
-      if (becameZero && !wasLocal && !debounced && !wasUndo) {
+      const oppBustWindowMs = 2500;
+      const bustToZero = (v === 0 && (now - (lastOpponentBustAt || 0)) < oppBustWindowMs);
+
+      if ((becameZero || bustToZero) && !wasLocal && !debounced && !wasUndo) {
         lastZeroAt = now;
+        if (bustToZero) lastOpponentBustAt = 0;
 
         // DE: nur ausführen, wenn User es in LEDs aktiviert hat (default: off)
         // EN: only fires if user enabled it in LEDs (default: off)
