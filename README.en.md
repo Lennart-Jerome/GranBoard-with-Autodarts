@@ -10,7 +10,7 @@ The script intelligently detects **how inputs must be entered in Autodarts** and
 
 - ✅ PC, laptop or Android Device **with Bluetooth**
 - ✅ Google Chrome or Microsoft Edge
-- ❌ No smartphone / tablet
+- ❌ No Iphone (IOS) or Ipad (IpadOS)
 - ❌ Firefox is not supported (no WebBluetooth)
 
 Additionally required:
