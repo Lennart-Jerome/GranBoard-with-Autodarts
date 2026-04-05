@@ -146,6 +146,20 @@ Der aktuelle Modus wird im Overlay angezeigt.
 
 ---
 
+## 🎯 Autodarts
+
+Wenn du Lust hast zu spielen oder das Script gemeinsam zu testen, kannst du mich gerne auf Autodarts adden:
+lenny_
+
+---
+
+## 💸 Unterstützung
+
+Wenn dir dieses Projekt gefällt und du mich in der Weiterentwicklung unterstützen möchtest:
+https://paypal.me/LennartJerome
+
+---
+
 ## 📜 Lizenz
 
 Private Nutzung & Hobby-Projekte erlaubt.  
