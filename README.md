@@ -8,7 +8,7 @@ Das Script erkennt intelligent, **wie Eingaben in Autodarts erfolgen müssen**, 
 
 ## 🖥️ Voraussetzungen (WICHTIG)
 
-- ✅ PC oder Laptop **mit Bluetooth**
+- ✅ PC, Laptop oder Android Device **mit Bluetooth**
 - ✅ Google Chrome oder Microsoft Edge
 - ❌ Kein Smartphone / Tablet
 - ❌ Firefox wird nicht unterstützt (kein WebBluetooth)
