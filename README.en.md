@@ -149,6 +149,20 @@ The current mode is shown in the overlay.
 
 ---
 
+## 🎯 Autodarts
+
+Feel free to add me on Autodarts if you want to play or test together:
+lenny_
+
+---
+
+## 💸 Support 
+
+If you enjoy this project and want to support further development, testing and improvements:
+https://paypal.me/LennartJerome
+
+---
+
 ## 📜 License
 
 Private use & hobby projects allowed.  
